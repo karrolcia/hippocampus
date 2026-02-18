@@ -1,0 +1,70 @@
+# Hippocampus — Project Context
+
+## What This Is
+Open-source, self-hosted MCP memory server. Universal memory across Claude, ChatGPT, Gemini, Cursor, Perplexity — any AI platform that supports MCP.
+
+"Your AI shouldn't forget who you are just because you switched apps."
+
+## Stack
+- Node.js 18+ / TypeScript
+- Hono (web framework)
+- `@modelcontextprotocol/sdk` (official MCP TypeScript SDK)
+- Streamable HTTP transport on `/mcp`
+- SQLite via `better-sqlite3-multiple-ciphers` (SQLCipher AES-256 encryption)
+- `@xenova/transformers` for local embeddings (all-MiniLM-L6-v2)
+- OAuth 2.1 with PKCE (self-contained, single user)
+- Docker + Caddy reverse proxy
+
+## Architecture
+- Knowledge graph: entities → observations → relationships
+- Semantic search via local embeddings (no external API keys)
+- Entire database encrypted at rest (including embedding vectors — they leak original text)
+- MCP tools: remember, recall, forget, update, context, consolidate, export
+
+## Key Design Decisions
+- **SQLCipher for everything**: Embeddings are NOT privacy-safe. Research shows text reconstruction from vectors. Encrypt the entire DB.
+- **Local embeddings only**: No OpenAI/Anthropic API dependency. `all-MiniLM-L6-v2` runs in Node.js via Transformers.js.
+- **OAuth 2.1 mandatory**: Claude.ai custom connectors need it. Self-contained auth server for single-user self-hosted.
+- **Streamable HTTP**: Modern MCP transport. Not SSE (deprecated). Not stdio (local only).
+- **No hosted version**: Open source, donations via Stripe Payment Link. No SaaS, no customer data liability.
+- **Hono over Express**: Lighter, faster, works well with MCP middleware packages.
+- **Consolidate = clustering only**: Hippocampus identifies duplicate clusters (embedding math). The AI does the merging (language intelligence). Each does what it's good at. The AI calls remember + forget to finalize.
+
+## Security Rules
+- NEVER log memory content, observation text, embeddings, tokens, or passphrase
+- All endpoints behind rate limiting
+- Input validation: 2,000 char max per memory, 200 char max entity name
+- `PRAGMA secure_delete = ON` for forget operations
+- Non-root Docker, cap_drop ALL, read-only filesystem (except /data)
+- CORS restricted to known AI platform origins
+- See SECURITY.md for full architecture
+
+## File Structure
+```
+src/
+├── index.ts              # Hono server setup, MCP transport
+├── mcp/
+│   ├── server.ts         # MCP server, tool registration
+│   └── tools/            # One file per tool
+├── db/
+│   ├── schema.ts         # SQLCipher schema + migrations
+│   ├── entities.ts
+│   ├── observations.ts
+│   └── relationships.ts
+├── embeddings/
+│   └── embedder.ts       # Local embedding generation + search
+└── auth/
+    └── oauth.ts          # Self-contained OAuth 2.1
+```
+
+## Revenue Model
+None. Open source + Stripe donation link ("buy me a coffee"). No billing code in the app.
+
+## Testing Checklist
+- [ ] remember + recall works via Claude Code (stdio transport for local dev)
+- [ ] remember + recall works via claude.ai (remote MCP, custom connector)
+- [ ] remember + recall works via ChatGPT (Developer Mode)
+- [ ] SQLCipher encryption verified (try opening .db without passphrase)
+- [ ] OAuth flow works for Claude.ai connector
+- [ ] Rate limiting active
+- [ ] Secure deletion verified (forget + check freed pages)

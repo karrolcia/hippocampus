@@ -1,0 +1,46 @@
+services:
+  hippocampus:
+    build: .
+    container_name: hippocampus
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - HIPPO_PASSPHRASE=${HIPPO_PASSPHRASE}
+      - HIPPO_DB_PATH=/data/hippocampus.db
+      - TRANSFORMERS_CACHE=/data/.models
+      - PORT=3000
+      - HOST=0.0.0.0
+      - HIPPO_OAUTH_ISSUER=${HIPPO_OAUTH_ISSUER:-}
+      - HIPPO_OAUTH_USER=${HIPPO_OAUTH_USER:-}
+      - HIPPO_OAUTH_PASSWORD_HASH=${HIPPO_OAUTH_PASSWORD_HASH:-}
+    volumes:
+      - hippo-data:/data
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=64M
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: hippocampus-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - hippocampus
+
+volumes:
+  hippo-data:
+  caddy-data:
+  caddy-config:

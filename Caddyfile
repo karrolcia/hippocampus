@@ -1,0 +1,25 @@
+# Replace with your domain
+memory.yourdomain.com {
+    reverse_proxy hippocampus:3000
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    # Logging (no request/response bodies)
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}
+
+# Local development (HTTP only)
+:80 {
+    reverse_proxy hippocampus:3000
+}
