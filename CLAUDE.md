@@ -61,7 +61,7 @@ src/
 None. Open source + Stripe donation link ("buy me a coffee"). No billing code in the app.
 
 ## Testing Checklist
-- [ ] remember + recall works via Claude Code (stdio transport for local dev)
+- [x] remember + recall works via Claude Code (HTTP transport, local dev)
 - [ ] remember + recall works via claude.ai (remote MCP, custom connector)
 - [ ] remember + recall works via ChatGPT (Developer Mode)
 - [ ] SQLCipher encryption verified (try opening .db without passphrase)
