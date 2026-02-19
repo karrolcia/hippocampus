@@ -6,6 +6,7 @@ import { forget } from './tools/forget.js';
 import { update } from './tools/update.js';
 import { context } from './tools/context.js';
 import { consolidate } from './tools/consolidate.js';
+import { exportMemories } from './tools/export.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -282,6 +283,53 @@ export function createMcpServer(): McpServer {
         const result = consolidate({
           entity: args.entity,
           threshold: args.threshold,
+        });
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    'export',
+    'Export memories as a CLAUDE.md context file, readable markdown, or JSON. Use claude-md for context files, markdown for human reading, json for backup/portability.',
+    {
+      format: z
+        .enum(['claude-md', 'markdown', 'json'])
+        .describe('Output format: claude-md (compact context), markdown (full with metadata), json (structured backup)'),
+      entity: z
+        .string()
+        .max(200)
+        .optional()
+        .describe('Export a single entity by name'),
+      type: z
+        .string()
+        .max(50)
+        .optional()
+        .describe('Filter entities by type (e.g., "person", "project")'),
+    },
+    async (args) => {
+      try {
+        const result = exportMemories({
+          format: args.format,
+          entity: args.entity,
+          type: args.type,
         });
         return {
           content: [
