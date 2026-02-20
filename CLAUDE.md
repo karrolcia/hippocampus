@@ -62,9 +62,9 @@ None. Open source + Stripe donation link ("buy me a coffee"). No billing code in
 
 ## Testing Checklist
 - [x] remember + recall works via Claude Code (HTTP transport, local dev)
-- [ ] remember + recall works via claude.ai (remote MCP, custom connector)
+- [x] remember + recall works via claude.ai (remote MCP, custom integration)
 - [ ] remember + recall works via ChatGPT (Developer Mode)
 - [ ] SQLCipher encryption verified (try opening .db without passphrase)
-- [ ] OAuth flow works for Claude.ai connector
+- [x] OAuth flow works for Claude.ai connector
 - [ ] Rate limiting active
 - [ ] Secure deletion verified (forget + check freed pages)
