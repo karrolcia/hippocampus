@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { findOrCreateEntity, listEntities, type Entity } from '../../db/entities.js';
-import { createObservation } from '../../db/observations.js';
+import { createObservation, deleteObservation } from '../../db/observations.js';
 import { createRelationship, relationshipExists } from '../../db/relationships.js';
-import { generateEmbedding, storeEmbedding } from '../../embeddings/embedder.js';
+import { generateEmbedding, storeEmbedding, getEmbeddingsByEntity, deleteEmbedding } from '../../embeddings/embedder.js';
+
+const DEDUP_THRESHOLD = 0.85;
 
 export const rememberSchema = z.object({
   content: z
@@ -28,18 +30,77 @@ export interface RememberResult {
   observationId: string;
   relationships_created: string[];
   message: string;
+  deduplicated?: boolean;
+  replaced_observation?: string;
+}
+
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+  }
+  return dot;
 }
 
 export async function remember(input: RememberInput): Promise<RememberResult> {
   const entityName = input.entity || 'general';
   const entity = findOrCreateEntity(entityName, input.type);
-  const observation = createObservation(entity.id, input.content, input.source);
 
-  // Generate and store embedding
+  // Generate embedding first (needed for dedup check before creating observation)
   const vector = await generateEmbedding(input.content);
+
+  // Dedup check: compare against existing observations for this entity
+  const existing = getEmbeddingsByEntity(entity.id);
+  let bestMatch: { similarity: number; index: number } | null = null;
+
+  for (let i = 0; i < existing.length; i++) {
+    const sim = cosineSimilarity(vector, existing[i].vector);
+    if (sim >= DEDUP_THRESHOLD && (!bestMatch || sim > bestMatch.similarity)) {
+      bestMatch = { similarity: sim, index: i };
+    }
+  }
+
+  if (bestMatch) {
+    const match = existing[bestMatch.index];
+
+    if (match.content.length >= input.content.length) {
+      // Existing is longer or equal — skip (already known)
+      return {
+        success: true,
+        entityId: entity.id,
+        entityName: entity.name,
+        observationId: match.observation_id,
+        relationships_created: [],
+        message: `Deduplicated: similar observation already exists for "${entity.name}" (similarity: ${bestMatch.similarity.toFixed(3)})`,
+        deduplicated: true,
+      };
+    }
+
+    // New content is longer — replace existing with new (more information)
+    const replacedContent = match.content;
+    deleteEmbedding(match.observation_id);
+    deleteObservation(match.observation_id);
+
+    const observation = createObservation(entity.id, input.content, input.source);
+    storeEmbedding(entity.id, observation.id, vector, input.content);
+
+    const relationshipsCreated = detectAndCreateRelationships(entity, input.content);
+
+    return {
+      success: true,
+      entityId: entity.id,
+      entityName: entity.name,
+      observationId: observation.id,
+      relationships_created: relationshipsCreated,
+      message: `Replaced shorter duplicate for "${entity.name}" (similarity: ${bestMatch.similarity.toFixed(3)})`,
+      replaced_observation: replacedContent,
+    };
+  }
+
+  // No duplicate found — proceed normally
+  const observation = createObservation(entity.id, input.content, input.source);
   storeEmbedding(entity.id, observation.id, vector, input.content);
 
-  // Auto-detect relationships from content
   const relationshipsCreated = detectAndCreateRelationships(entity, input.content);
 
   return {

@@ -19,7 +19,7 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - Knowledge graph: entities → observations → relationships
 - Semantic search via local embeddings (no external API keys)
 - Entire database encrypted at rest (including embedding vectors — they leak original text)
-- MCP tools: remember, recall, forget, update, context, consolidate, export
+- MCP tools: remember, recall, forget, update, merge, context, consolidate, export
 - MCP resources: `hippocampus://context` (full knowledge graph, claude-md format), `hippocampus://entity/{name}` (per-entity context with relationships)
 
 ## Key Design Decisions
@@ -29,7 +29,9 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - **Streamable HTTP**: Modern MCP transport. Not SSE (deprecated). Not stdio (local only).
 - **No hosted version**: Open source, donations via Stripe Payment Link. No SaaS, no customer data liability.
 - **Hono over Express**: Lighter, faster, works well with MCP middleware packages.
-- **Consolidate = clustering only**: Hippocampus identifies duplicate clusters (embedding math). The AI does the merging (language intelligence). Each does what it's good at. The AI calls remember + forget to finalize.
+- **Consolidate = clustering only**: Hippocampus identifies duplicate clusters (embedding math). The AI does the merging (language intelligence). Each does what it's good at. The AI calls `merge` to finalize.
+- **Dedup on write**: `remember` checks for near-duplicates (cosine similarity >= 0.85) on the same entity before storing. If existing content is longer/equal, skips. If new content is longer, replaces. Conservative threshold — only catches near-verbatim repeats.
+- **Merge = atomic consolidation**: Single tool call replaces multi-step `remember` + N x `forget` dance. AI provides merged text + observation IDs, Hippocampus handles the rest.
 
 ## Security Rules
 - NEVER log memory content, observation text, embeddings, tokens, or passphrase

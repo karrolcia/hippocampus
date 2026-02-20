@@ -164,7 +164,7 @@ export function consolidate(input: ConsolidateInput): ConsolidateResult {
     clusters,
     message: clusters.length === 0
       ? `Scanned ${vectors.length} observations — no clusters found above threshold ${threshold}.`
-      : `Found ${clusters.length} cluster(s) across ${vectors.length} observations. Review each cluster and use remember + forget to merge.`,
+      : `Found ${clusters.length} cluster(s) across ${vectors.length} observations. Review each cluster and use merge to consolidate.`,
   };
 }
 

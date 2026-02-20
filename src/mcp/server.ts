@@ -4,6 +4,7 @@ import { remember } from './tools/remember.js';
 import { recall } from './tools/recall.js';
 import { forget } from './tools/forget.js';
 import { update } from './tools/update.js';
+import { merge } from './tools/merge.js';
 import { context } from './tools/context.js';
 import { consolidate } from './tools/consolidate.js';
 import { exportMemories } from './tools/export.js';
@@ -220,6 +221,49 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
+    'merge',
+    'Merge multiple observations into one. Atomic operation: provide merged text + list of observation IDs. Creates the merged observation, deletes the originals, handles embeddings. Use after consolidate to act on clusters.',
+    {
+      observation_ids: z
+        .array(z.string())
+        .min(2)
+        .describe('IDs of observations to merge (minimum 2). All must belong to the same entity.'),
+      content: z
+        .string()
+        .min(1)
+        .max(2000)
+        .describe('The merged content combining information from all observations'),
+    },
+    async (args) => {
+      try {
+        const sanitizedContent = args.content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+        const result = await merge({
+          observation_ids: args.observation_ids,
+          content: sanitizedContent,
+        });
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
     'context',
     'Get full context about a topic: the entity, its observations, relationships, and related entities. Follows relationship graph to discover connected information.',
     {
@@ -265,7 +309,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'consolidate',
-    'Identify groups of similar or overlapping memories that could be merged into fewer, denser observations. Returns clusters — review each cluster and use remember + forget to consolidate.',
+    'Identify groups of similar or overlapping memories that could be merged into fewer, denser observations. Returns clusters — review each cluster and use merge to consolidate.',
     {
       entity: z
         .string()
