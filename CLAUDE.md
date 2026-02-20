@@ -64,7 +64,7 @@ None. Open source + Stripe donation link ("buy me a coffee"). No billing code in
 - [x] remember + recall works via Claude Code (HTTP transport, local dev)
 - [x] remember + recall works via claude.ai (remote MCP, custom integration)
 - [ ] remember + recall works via ChatGPT (Developer Mode)
-- [ ] SQLCipher encryption verified (try opening .db without passphrase)
+- [x] SQLCipher encryption verified (file unreadable without passphrase, header is random bytes)
 - [x] OAuth flow works for Claude.ai connector
-- [ ] Rate limiting active
-- [ ] Secure deletion verified (forget + check freed pages)
+- [x] Rate limiting active (429 at request #61)
+- [x] Secure deletion verified (PRAGMA secure_delete = ON)
