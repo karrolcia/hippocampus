@@ -20,6 +20,7 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - Semantic search via local embeddings (no external API keys)
 - Entire database encrypted at rest (including embedding vectors — they leak original text)
 - MCP tools: remember, recall, forget, update, context, consolidate, export
+- MCP resources: `hippocampus://context` (full knowledge graph, claude-md format), `hippocampus://entity/{name}` (per-entity context with relationships)
 
 ## Key Design Decisions
 - **SQLCipher for everything**: Embeddings are NOT privacy-safe. Research shows text reconstruction from vectors. Encrypt the entire DB.
@@ -44,8 +45,9 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 src/
 ├── index.ts              # Hono server setup, MCP transport
 ├── mcp/
-│   ├── server.ts         # MCP server, tool registration
-│   └── tools/            # One file per tool
+│   ├── server.ts         # MCP server, tool + resource registration
+│   ├── tools/            # One file per tool
+│   └── resources/        # MCP resources (proactive context)
 ├── db/
 │   ├── schema.ts         # SQLCipher schema + migrations
 │   ├── entities.ts

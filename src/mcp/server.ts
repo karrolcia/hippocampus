@@ -7,6 +7,7 @@ import { update } from './tools/update.js';
 import { context } from './tools/context.js';
 import { consolidate } from './tools/consolidate.js';
 import { exportMemories } from './tools/export.js';
+import { registerContextResources } from './resources/context.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -352,6 +353,9 @@ export function createMcpServer(): McpServer {
       }
     }
   );
+
+  // Resources — proactive context for warm-start AI sessions
+  registerContextResources(server);
 
   return server;
 }

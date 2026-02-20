@@ -17,10 +17,21 @@ export interface ExportResult {
   message: string;
 }
 
-interface EntityData {
+export interface EntityData {
   entity: Entity;
   observations: Observation[];
   relationships: RelationshipWithNames[];
+}
+
+/** Fetch observations and relationships for a list of entities. */
+export function gatherEntityData(entities: Entity[]): EntityData[] {
+  const entitiesData: EntityData[] = [];
+  for (const entity of entities) {
+    const observations = getObservationsByEntity(entity.id);
+    const relationships = getRelationshipsByEntity(entity.id);
+    entitiesData.push({ entity, observations, relationships });
+  }
+  return entitiesData;
 }
 
 export function exportMemories(input: ExportInput): ExportResult {
@@ -58,15 +69,9 @@ export function exportMemories(input: ExportInput): ExportResult {
   }
 
   // Fetch observations and relationships for each entity
-  const entitiesData: EntityData[] = [];
+  const entitiesData = gatherEntityData(entities);
   let totalObservations = 0;
-
-  for (const entity of entities) {
-    const observations = getObservationsByEntity(entity.id);
-    const relationships = getRelationshipsByEntity(entity.id);
-    totalObservations += observations.length;
-    entitiesData.push({ entity, observations, relationships });
-  }
+  for (const ed of entitiesData) totalObservations += ed.observations.length;
 
   // Deduplicate relationships across entities (same rel appears under both ends)
   const allRelationships = deduplicateRelationships(entitiesData);
@@ -95,7 +100,7 @@ export function exportMemories(input: ExportInput): ExportResult {
   };
 }
 
-function deduplicateRelationships(entitiesData: EntityData[]): RelationshipWithNames[] {
+export function deduplicateRelationships(entitiesData: EntityData[]): RelationshipWithNames[] {
   const seen = new Set<string>();
   const unique: RelationshipWithNames[] = [];
 
@@ -111,8 +116,8 @@ function deduplicateRelationships(entitiesData: EntityData[]): RelationshipWithN
   return unique;
 }
 
-// Compact context file — entities grouped by type, observations as bullets
-function formatClaudeMd(entitiesData: EntityData[]): string {
+/** Compact context file — entities grouped by type, observations as bullets. */
+export function formatClaudeMd(entitiesData: EntityData[]): string {
   const grouped = new Map<string, EntityData[]>();
 
   for (const ed of entitiesData) {
@@ -140,8 +145,8 @@ function formatClaudeMd(entitiesData: EntityData[]): string {
   return lines.join('\n').trimEnd() + '\n';
 }
 
-// Full readable export with metadata
-function formatMarkdown(entitiesData: EntityData[], allRelationships: RelationshipWithNames[]): string {
+/** Full readable export with metadata. */
+export function formatMarkdown(entitiesData: EntityData[], allRelationships: RelationshipWithNames[]): string {
   const lines: string[] = [
     '# Hippocampus Memory Export',
     `Generated: ${new Date().toISOString()}`,
