@@ -288,8 +288,19 @@ cd hippocampus
 
 fly launch                # Creates app + Dockerfile detected automatically
 fly volumes create hippo_data --size 1
+```
 
-# Set secrets
+Edit the generated `fly.toml` — add a volume mount so the database persists across deploys:
+
+```toml
+[mounts]
+  source = "hippo_data"
+  destination = "/data"
+```
+
+Then set secrets and deploy:
+
+```bash
 fly secrets set HIPPO_PASSPHRASE=$(openssl rand -base64 32)
 fly secrets set HIPPO_OAUTH_ISSUER=https://<your-app>.fly.dev
 fly secrets set HIPPO_OAUTH_USER=admin
@@ -319,9 +330,24 @@ cp .env.example .env
 
 docker compose up -d
 
-# Install and configure cloudflared
+# Install cloudflared and create a tunnel
 cloudflared tunnel create hippocampus
 cloudflared tunnel route dns hippocampus hippo.yourdomain.com
+```
+
+Create `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: hippocampus
+ingress:
+  - hostname: hippo.yourdomain.com
+    service: http://localhost:3000
+  - service: http_status:404
+```
+
+Start the tunnel:
+
+```bash
 cloudflared tunnel run hippocampus
 ```
 
@@ -421,11 +447,11 @@ src/
 ### Running tests
 
 ```bash
-# Full end-to-end test suite (all 9 tools, real embeddings, temp encrypted DB)
-HIPPO_PASSPHRASE=test HIPPO_DB_PATH=/tmp/hippo-test.db npx tsx test-all-tools.ts
+# Unit + integration tests
+npm test
 
-# Export tool tests only
-HIPPO_PASSPHRASE=test HIPPO_DB_PATH=/tmp/hippo-test-export.db npx tsx test-export.ts
+# Full end-to-end smoke test (all 9 tools, real embeddings, temp encrypted DB)
+HIPPO_PASSPHRASE=test HIPPO_DB_PATH=/tmp/hippo-test.db npx tsx test-all-tools.ts
 ```
 
 ## Platform compatibility
