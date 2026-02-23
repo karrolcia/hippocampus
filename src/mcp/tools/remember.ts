@@ -20,6 +20,7 @@ export const rememberSchema = z.object({
     .transform(s => s?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')),
   type: z.string().max(50).optional(),
   source: z.string().max(100).optional(),
+  importance: z.number().min(0).max(1).optional(),
 });
 
 export type RememberInput = z.infer<typeof rememberSchema>;
@@ -74,7 +75,7 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
     deleteEmbedding(match.observation_id);
     deleteObservation(match.observation_id);
 
-    const observation = createObservation(entity.id, input.content, input.source);
+    const observation = createObservation(entity.id, input.content, input.source, input.importance ?? 1.0);
     storeEmbedding(entity.id, observation.id, vector, input.content);
 
     const relationshipsCreated = detectAndCreateRelationships(entity, input.content);
@@ -91,7 +92,7 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
   }
 
   // No duplicate found — proceed normally
-  const observation = createObservation(entity.id, input.content, input.source);
+  const observation = createObservation(entity.id, input.content, input.source, input.importance ?? 1.0);
   storeEmbedding(entity.id, observation.id, vector, input.content);
 
   const relationshipsCreated = detectAndCreateRelationships(entity, input.content);

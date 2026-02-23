@@ -113,3 +113,35 @@ export function deleteRelationshipsByEntity(entityId: string): number {
   ).run(entityId, entityId);
   return result.changes;
 }
+
+export function mergeRelationships(fromEntityId: string, toEntityId: string): number {
+  const db = getDatabase();
+  let changes = 0;
+
+  // Move relationships pointing from source to target
+  const r1 = db.prepare(
+    'UPDATE relationships SET from_entity = ? WHERE from_entity = ?'
+  ).run(toEntityId, fromEntityId);
+  changes += r1.changes;
+
+  // Move relationships pointing to source to target
+  const r2 = db.prepare(
+    'UPDATE relationships SET to_entity = ? WHERE to_entity = ?'
+  ).run(toEntityId, fromEntityId);
+  changes += r2.changes;
+
+  // Delete self-references (from_entity = to_entity)
+  db.prepare(
+    'DELETE FROM relationships WHERE from_entity = to_entity'
+  ).run();
+
+  // Deduplicate by (from_entity, to_entity, relation_type) — keep MIN(id)
+  db.prepare(`
+    DELETE FROM relationships WHERE id NOT IN (
+      SELECT MIN(id) FROM relationships
+      GROUP BY from_entity, to_entity, relation_type
+    )
+  `).run();
+
+  return changes;
+}

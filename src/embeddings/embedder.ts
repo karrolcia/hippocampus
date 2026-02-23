@@ -128,9 +128,11 @@ export async function semanticSearch(
   const db = getDatabase();
 
   // Build query with optional filters
+  // Pull recall_count + importance for decay-weighted scoring
   let sql = `
     SELECT emb.observation_id, emb.entity_id, emb.vector,
       o.content, o.source, o.created_at,
+      o.recall_count, o.importance,
       e.name as entity_name, e.type as entity_type
     FROM embeddings emb
     JOIN observations o ON emb.observation_id = o.id
@@ -160,11 +162,16 @@ export async function semanticSearch(
     content: string;
     source: string | null;
     created_at: string;
+    recall_count: number;
+    importance: number;
     entity_name: string;
     entity_type: string | null;
   }>;
 
-  // Compute similarities via dot product (vectors are normalized → dot = cosine)
+  // Decay-weighted scoring: similarity * recency boost * importance
+  // ALPHA = 0.1 — gentle nudge, similarity stays dominant signal
+  const ALPHA = 0.1;
+
   const scored = rows.map(row => {
     const storedVector = new Float32Array(
       row.vector.buffer,
@@ -172,6 +179,9 @@ export async function semanticSearch(
       EMBEDDING_DIM
     );
     const similarity = cosineSimilarity(queryVector, storedVector);
+    const recallBoost = 1 + ALPHA * Math.log(1 + (row.recall_count ?? 0));
+    const importance = row.importance ?? 1.0;
+    const finalScore = similarity * recallBoost * importance;
     return {
       observation_id: row.observation_id,
       entity_id: row.entity_id,
@@ -180,12 +190,14 @@ export async function semanticSearch(
       content: row.content,
       source: row.source,
       created_at: row.created_at,
-      similarity,
+      similarity, // raw cosine, for display
+      finalScore, // used for ranking only
     };
   });
 
-  scored.sort((a, b) => b.similarity - a.similarity);
-  return scored.slice(0, limit);
+  scored.sort((a, b) => b.finalScore - a.finalScore);
+  // Strip finalScore from results — internal ranking detail
+  return scored.slice(0, limit).map(({ finalScore, ...rest }) => rest);
 }
 
 export function deleteEmbedding(observationId: string): boolean {
@@ -197,6 +209,14 @@ export function deleteEmbedding(observationId: string): boolean {
 export function deleteEmbeddingsByEntity(entityId: string): number {
   const db = getDatabase();
   const result = db.prepare('DELETE FROM embeddings WHERE entity_id = ?').run(entityId);
+  return result.changes;
+}
+
+export function moveEmbeddingsToEntity(fromEntityId: string, toEntityId: string): number {
+  const db = getDatabase();
+  const result = db.prepare(
+    'UPDATE embeddings SET entity_id = ? WHERE entity_id = ?'
+  ).run(toEntityId, fromEntityId);
   return result.changes;
 }
 

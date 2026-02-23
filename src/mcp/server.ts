@@ -5,6 +5,7 @@ import { recall } from './tools/recall.js';
 import { forget } from './tools/forget.js';
 import { update } from './tools/update.js';
 import { merge } from './tools/merge.js';
+import { mergeEntities } from './tools/merge-entities.js';
 import { context } from './tools/context.js';
 import { consolidate } from './tools/consolidate.js';
 import { exportMemories } from './tools/export.js';
@@ -40,6 +41,12 @@ export function createMcpServer(): McpServer {
         .max(100)
         .optional()
         .describe('Source of the information (e.g., "conversation", "explicit")'),
+      importance: z
+        .number()
+        .min(0)
+        .max(1)
+        .optional()
+        .describe('Importance score (0.0-1.0, default 1.0). Higher = boosted in recall ranking. Use for facts that should always surface.'),
     },
     async (args) => {
       try {
@@ -48,6 +55,7 @@ export function createMcpServer(): McpServer {
           entity: args.entity?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
           type: args.type,
           source: args.source,
+          importance: args.importance,
         };
 
         const result = await remember(sanitizedArgs);
@@ -245,6 +253,55 @@ export function createMcpServer(): McpServer {
         const result = await merge({
           observation_ids: args.observation_ids,
           content: sanitizedContent,
+        });
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    'merge_entities',
+    'Merge multiple entities into one. Moves all observations, embeddings, and relationships from source entities to target, then deletes sources. Use after consolidate mode:"entities" to act on detected duplicates.',
+    {
+      source_entities: z
+        .array(z.string().min(1).max(200))
+        .min(1)
+        .max(10)
+        .describe('Entity names to merge from (1-10). These entities will be deleted after their data is moved.'),
+      target_entity: z
+        .string()
+        .min(1)
+        .max(200)
+        .describe('Entity name to merge into. Created if it does not exist.'),
+      target_type: z
+        .string()
+        .max(50)
+        .optional()
+        .describe('Type for the target entity (only used if creating new)'),
+    },
+    async (args) => {
+      try {
+        const result = mergeEntities({
+          source_entities: args.source_entities,
+          target_entity: args.target_entity.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
+          target_type: args.target_type,
         });
         return {
           content: [

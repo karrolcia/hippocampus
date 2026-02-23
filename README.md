@@ -44,6 +44,8 @@ Data model: knowledge graph with entities, observations, and relationships. Sema
 | `context` | Get everything about a topic — observations, relationships, related entities |
 | `update` | Replace an existing observation with new content |
 | `forget` | Permanently delete a memory or entity (secure deletion) |
+| `merge` | Merge multiple observations into one (atomic consolidation) |
+| `merge_entities` | Merge multiple entities into one — moves all data, deletes sources |
 | `consolidate` | Find clusters of similar/duplicate memories for review |
 | `export` | Export as CLAUDE.md context file, readable markdown, or JSON |
 
@@ -242,6 +244,7 @@ For local development without OAuth, set `HIPPO_TOKEN` in `.env` and pass it as 
 | `HIPPO_OAUTH_PASSWORD_HASH` | No | — | SHA-256 hash of OAuth password |
 | `RATE_LIMIT_REMEMBER` | No | `20` | Write rate limit per minute |
 | `RATE_LIMIT_RECALL` | No | `60` | Read rate limit per minute |
+| `HIPPO_CONTEXT_MAX_OBSERVATIONS` | No | `100` | Max observations in `hippocampus://context` resource |
 | `TRANSFORMERS_CACHE` | No | System default | Embedding model cache directory |
 
 ## Security
@@ -264,8 +267,8 @@ src/
 ├── index.ts              # Hono server, MCP Streamable HTTP transport
 ├── config.ts             # Environment config with Zod validation
 ├── mcp/
-│   ├── server.ts         # MCP tool registration (7 tools)
-│   └── tools/            # remember, recall, forget, update, context, consolidate, export
+│   ├── server.ts         # MCP tool registration (9 tools)
+│   └── tools/            # remember, recall, forget, update, merge, merge_entities, context, consolidate, export
 ├── db/
 │   ├── index.ts          # SQLCipher initialization
 │   ├── schema.ts         # Schema + migrations
@@ -283,7 +286,7 @@ src/
 ## Running tests
 
 ```bash
-# Full end-to-end test suite (all 7 tools, real embeddings, temp encrypted DB)
+# Full end-to-end test suite (all 9 tools, real embeddings, temp encrypted DB)
 HIPPO_PASSPHRASE=test HIPPO_DB_PATH=/tmp/hippo-test.db npx tsx test-all-tools.ts
 
 # Export tool tests only
@@ -310,6 +313,6 @@ MIT
 
 ## Support
 
-If Hippocampus is useful to you, [buy me a coffee](https://buy.stripe.com/placeholder).
+If Hippocampus is useful to you, [buy me a coffee](https://buy.stripe.com/5kQ9AT4IydTz7h1apHb7y00).
 
 Open source. Free forever. No hosted version. No SaaS.

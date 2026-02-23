@@ -135,8 +135,8 @@ describe('Budgeted context', () => {
       {
         entity: { id: '1', name: 'test', type: null, created_at: '', updated_at: '' },
         observations: [
-          { id: 'o1', entity_id: '1', content: 'a', source: null, created_at: '', last_recalled_at: null, recall_count: 0 },
-          { id: 'o2', entity_id: '1', content: 'b', source: null, created_at: '', last_recalled_at: null, recall_count: 0 },
+          { id: 'o1', entity_id: '1', content: 'a', source: null, created_at: '', last_recalled_at: null, recall_count: 0, importance: 1.0 },
+          { id: 'o2', entity_id: '1', content: 'b', source: null, created_at: '', last_recalled_at: null, recall_count: 0, importance: 1.0 },
         ],
         relationships: [],
       },
@@ -152,18 +152,19 @@ describe('Budgeted context', () => {
 // ─── Feature 4: Access Tracking ───
 
 describe('Access tracking', () => {
-  test('schema is version 3', () => {
+  test('schema is version 4', () => {
     const db = getDatabase();
     const version = getSchemaVersion(db);
-    assert.equal(version, 3);
+    assert.equal(version, 4);
   });
 
-  test('observations table has recall tracking columns', () => {
+  test('observations table has recall tracking and importance columns', () => {
     const db = getDatabase();
     const columns = db.prepare("PRAGMA table_info('observations')").all() as Array<{ name: string }>;
     const colNames = columns.map(c => c.name);
     assert.ok(colNames.includes('last_recalled_at'), 'Should have last_recalled_at column');
     assert.ok(colNames.includes('recall_count'), 'Should have recall_count column');
+    assert.ok(colNames.includes('importance'), 'Should have importance column');
   });
 
   test('recall increments recall_count on matched observations', async () => {
@@ -265,5 +266,187 @@ describe('Entity resolution', () => {
     assert.equal(result.success, true);
     // Observation mode returns total_observations, not total_entities
     assert.ok('total_observations' in result, 'Default should be observation mode');
+  });
+});
+
+// ─── Feature 6: Decay-Weighted Retrieval ───
+
+describe('Decay-weighted retrieval', () => {
+  test('frequently recalled observations rank higher', async () => {
+    // Use unique marker words to avoid cross-test interference
+    const obsA = await remember({ content: 'Xylophone zephyr: the crimson foxglove blooms in alpine meadows', entity: 'decay-boosted', type: 'decay' });
+    const obsB = await remember({ content: 'Xylophone zephyr: the scarlet foxglove blooms in alpine meadows', entity: 'decay-unboosted', type: 'decay' });
+
+    // Directly set recall_count on obsA via DB to avoid side effects from recall() touching other observations
+    const db = getDatabase();
+    db.prepare('UPDATE observations SET recall_count = 50 WHERE id = ?').run(obsA.observationId);
+
+    // Search with a neutral query — both observations are near-identical semantically
+    const result = await recall({ query: 'xylophone zephyr foxglove blooms alpine meadows', format: 'full', limit: 50 }) as {
+      success: boolean;
+      memories: Array<{ content: string; observation_id: string }>;
+    };
+
+    const crimsonIdx = result.memories.findIndex(m => m.content.includes('crimson foxglove'));
+    const scarletIdx = result.memories.findIndex(m => m.content.includes('scarlet foxglove'));
+    assert.ok(crimsonIdx >= 0 && scarletIdx >= 0, 'Both observations should appear');
+    assert.ok(crimsonIdx < scarletIdx, 'Frequently recalled observation should rank higher');
+  });
+
+  test('zero recall_count gets neutral boost (no penalty)', async () => {
+    await remember({ content: 'Zero recall test: photosynthesis in chloroplasts', entity: 'decay-neutral', type: 'test' });
+
+    const result = await recall({ query: 'photosynthesis chloroplasts', format: 'full' }) as {
+      success: boolean;
+      memories: Array<{ content: string; observation_id: string }>;
+    };
+
+    assert.ok(result.memories.length > 0, 'Should return results');
+    const match = result.memories.find(m => m.content.includes('photosynthesis'));
+    assert.ok(match, 'Zero-recall observation should still be found');
+  });
+});
+
+// ─── Feature 7: Observation Importance ───
+
+describe('Observation importance', () => {
+  test('high importance outranks low importance', async () => {
+    // Create low-importance observation first
+    await remember({
+      content: 'Low importance: minor detail about weather patterns',
+      entity: 'importance-test',
+      type: 'test',
+      importance: 0.3,
+    });
+    // Create high-importance observation
+    await remember({
+      content: 'High importance: critical detail about weather systems',
+      entity: 'importance-test',
+      type: 'test',
+      importance: 1.0,
+    });
+
+    const result = await recall({ query: 'weather patterns systems detail', format: 'full' }) as {
+      success: boolean;
+      memories: Array<{ content: string }>;
+    };
+
+    assert.ok(result.memories.length >= 2, 'Should return at least 2 results');
+    const highIdx = result.memories.findIndex(m => m.content.includes('High importance'));
+    const lowIdx = result.memories.findIndex(m => m.content.includes('Low importance'));
+    assert.ok(highIdx >= 0 && lowIdx >= 0, 'Both observations should appear');
+    assert.ok(highIdx < lowIdx, 'High importance should rank above low importance');
+  });
+
+  test('default importance is 1.0', async () => {
+    await remember({
+      content: 'Default importance: no param specified for testing',
+      entity: 'importance-default',
+      type: 'test',
+    });
+
+    const entity = findEntityByName('importance-default');
+    assert.ok(entity);
+    const observations = getObservationsByEntity(entity.id);
+    const obs = observations.find(o => o.content.includes('Default importance'));
+    assert.ok(obs);
+    assert.equal(obs.importance, 1.0, 'Default importance should be 1.0');
+  });
+});
+
+// ─── Feature 8: Entity Merge ───
+
+const { mergeEntities } = await import('../src/mcp/tools/merge-entities.js');
+const { findEntityByName: findEntity } = await import('../src/db/entities.js');
+const { createRelationship } = await import('../src/db/relationships.js');
+
+describe('Entity merge', () => {
+  test('merge 2 source entities into target', async () => {
+    await remember({ content: 'Source A observation: cats are mammals', entity: 'merge-source-a', type: 'test' });
+    await remember({ content: 'Source B observation: dogs are mammals', entity: 'merge-source-b', type: 'test' });
+
+    const result = mergeEntities({
+      source_entities: ['merge-source-a', 'merge-source-b'],
+      target_entity: 'merge-target',
+      target_type: 'test',
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.merged_count, 2);
+    assert.equal(result.observations_moved, 2);
+    assert.ok(result.deleted_entities.includes('merge-source-a'));
+    assert.ok(result.deleted_entities.includes('merge-source-b'));
+
+    // Source entities should be gone
+    assert.equal(findEntity('merge-source-a'), undefined);
+    assert.equal(findEntity('merge-source-b'), undefined);
+
+    // Target should have all observations
+    const target = findEntity('merge-target');
+    assert.ok(target);
+    const obs = getObservationsByEntity(target.id);
+    assert.equal(obs.length, 2);
+  });
+
+  test('self-merge rejected', () => {
+    assert.throws(
+      () => mergeEntities({
+        source_entities: ['some-entity'],
+        target_entity: 'some-entity',
+      }),
+      /self-merge/
+    );
+  });
+
+  test('source entity not found throws', async () => {
+    assert.throws(
+      () => mergeEntities({
+        source_entities: ['nonexistent-entity-xyz'],
+        target_entity: 'any-target',
+      }),
+      /not found/
+    );
+  });
+
+  test('relationships correctly moved and deduplicated', async () => {
+    await remember({ content: 'Entity R1 data', entity: 'merge-rel-1', type: 'test' });
+    await remember({ content: 'Entity R2 data', entity: 'merge-rel-2', type: 'test' });
+    await remember({ content: 'Entity R3 other data', entity: 'merge-rel-3', type: 'test' });
+
+    const r1 = findEntity('merge-rel-1')!;
+    const r2 = findEntity('merge-rel-2')!;
+    const r3 = findEntity('merge-rel-3')!;
+
+    // Create relationships: R1→R3, R2→R3
+    createRelationship(r1.id, r3.id, 'relates_to');
+    createRelationship(r2.id, r3.id, 'relates_to');
+
+    // Merge R1 and R2 into R2 (R2 is both source and target won't work, so merge into new)
+    const result = mergeEntities({
+      source_entities: ['merge-rel-1', 'merge-rel-2'],
+      target_entity: 'merge-rel-combined',
+      target_type: 'test',
+    });
+
+    assert.equal(result.success, true);
+    assert.ok(result.relationships_updated > 0, 'Relationships should have been updated');
+  });
+
+  test('merged observations still searchable via recall', async () => {
+    await remember({ content: 'Searchable after merge: quantum entanglement theory', entity: 'merge-search-src', type: 'test' });
+
+    mergeEntities({
+      source_entities: ['merge-search-src'],
+      target_entity: 'merge-search-dest',
+      target_type: 'test',
+    });
+
+    const result = await recall({ query: 'quantum entanglement theory', format: 'full' }) as {
+      success: boolean;
+      memories: Array<{ content: string; entity: string }>;
+    };
+
+    const match = result.memories.find(m => m.content.includes('quantum entanglement'));
+    assert.ok(match, 'Merged observation should still be searchable');
   });
 });

@@ -19,7 +19,7 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - Knowledge graph: entities → observations → relationships
 - Semantic search via local embeddings (no external API keys)
 - Entire database encrypted at rest (including embedding vectors — they leak original text)
-- MCP tools: remember, recall, forget, update, merge, context, consolidate, export
+- MCP tools: remember, recall, forget, update, merge, merge_entities, context, consolidate, export
 - MCP resources: `hippocampus://context` (full knowledge graph, claude-md format), `hippocampus://entity/{name}` (per-entity context with relationships)
 
 ## Key Design Decisions
@@ -37,6 +37,9 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - **Budgeted context**: `hippocampus://context` resource capped at `HIPPO_CONTEXT_MAX_OBSERVATIONS` (default 100). Prioritizes most-recently-updated entities, partial-includes the last entity at the budget boundary.
 - **Access tracking**: Schema V3 adds `recall_count` + `last_recalled_at` per observation. Foundation for decay-weighted retrieval. Updated on every recall match.
 - **Entity resolution**: `consolidate mode: "entities"` embeds entity names, clusters by cosine similarity (default threshold 0.7). Detection only — AI decides what to merge. Surfaces cross-entity redundancy invisible to per-entity dedup.
+- **Decay-weighted retrieval**: `score = similarity * (1 + 0.1 * log(1 + recall_count)) * importance`. Gentle boost from access tracking — similarity stays the dominant signal. recall_count=0 → neutral (no penalty), recall_count=100 → ~1.46x boost.
+- **Observation importance**: Schema V4 — `importance REAL DEFAULT 1.0` per observation. Manual override for always-relevant facts. Set via `remember` tool's `importance` param (0.0-1.0). Multiplied into recall scoring.
+- **Entity merge**: `merge_entities` tool — structural consolidation companion to `consolidate mode: "entities"`. Moves observations, embeddings, relationships atomically in a transaction, then deletes source entities.
 
 ## Security Rules
 - NEVER log memory content, observation text, embeddings, tokens, or passphrase

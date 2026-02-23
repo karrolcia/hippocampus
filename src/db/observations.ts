@@ -10,6 +10,7 @@ export interface Observation {
   created_at: string;
   last_recalled_at: string | null;
   recall_count: number;
+  importance: number;
 }
 
 export interface ObservationWithEntity extends Observation {
@@ -20,15 +21,16 @@ export interface ObservationWithEntity extends Observation {
 export function createObservation(
   entityId: string,
   content: string,
-  source?: string
+  source?: string,
+  importance: number = 1.0
 ): Observation {
   const db = getDatabase();
   const id = randomUUID();
 
   db.prepare(`
-    INSERT INTO observations (id, entity_id, content, source)
-    VALUES (?, ?, ?, ?)
-  `).run(id, entityId, content, source ?? null);
+    INSERT INTO observations (id, entity_id, content, source, importance)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, entityId, content, source ?? null, importance);
 
   updateEntityTimestamp(entityId);
 
@@ -119,4 +121,13 @@ export function deleteObservation(id: string): boolean {
   const db = getDatabase();
   const result = db.prepare('DELETE FROM observations WHERE id = ?').run(id);
   return result.changes > 0;
+}
+
+export function moveObservationsToEntity(fromEntityId: string, toEntityId: string): number {
+  const db = getDatabase();
+  const result = db.prepare(
+    'UPDATE observations SET entity_id = ? WHERE entity_id = ?'
+  ).run(toEntityId, fromEntityId);
+  updateEntityTimestamp(toEntityId);
+  return result.changes;
 }
