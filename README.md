@@ -31,9 +31,301 @@ Cursor / Windsurf ────┤
 Perplexity ───────────┘
 ```
 
-[MCP](https://modelcontextprotocol.io/) (Model Context Protocol) is the open standard every major AI platform has adopted. Hippocampus is a remote MCP server that exposes memory tools over Streamable HTTP. Any AI client that supports MCP can connect.
+[MCP](https://modelcontextprotocol.io/) (Model Context Protocol) is the open standard every major AI platform has adopted. Hippocampus is a remote MCP server that exposes memory tools over Streamable HTTP — `remember`, `recall`, `forget`, and six more. Any AI client that supports MCP can connect.
 
 Data model: knowledge graph with entities, observations, and relationships. Semantic search via local embeddings. Entire database encrypted at rest with SQLCipher (AES-256) — including embedding vectors, which [leak original text](https://arxiv.org/abs/2305.03010).
+
+## Try it in 5 minutes
+
+You need Node.js 18+ installed.
+
+**1. Clone and install**
+
+```bash
+git clone https://github.com/karrolcia/hippocampus.git
+cd hippocampus
+npm install
+```
+
+**2. Create your `.env` file**
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and set your passphrase (this encrypts the database):
+
+```env
+HIPPO_PASSPHRASE=any-secret-phrase-you-want
+```
+
+That's the only required value. Everything else has defaults.
+
+**3. Start the server**
+
+```bash
+npm run dev
+```
+
+You should see:
+
+```
+Hippocampus starting on http://0.0.0.0:3000
+MCP endpoint: http://0.0.0.0:3000/mcp
+```
+
+The embedding model (~80MB) downloads automatically on first run — this takes a minute the first time.
+
+**4. Verify it's alive**
+
+```bash
+curl http://localhost:3000/health
+```
+
+Expected response:
+
+```json
+{"status":"ok","version":"0.1.0"}
+```
+
+**5. Connect Claude Code**
+
+```bash
+claude mcp add hippocampus --transport http http://localhost:3000/mcp
+```
+
+**6. Try it**
+
+Open a Claude Code session and say:
+
+> Remember that my preferred language is TypeScript and I use Hono as my web framework.
+
+Then in a new session:
+
+> What do you know about my tech preferences?
+
+If it comes back with TypeScript and Hono, it's working. Your AI now has persistent memory.
+
+## Deploy to a server
+
+Local is great for trying it out. To use Hippocampus across all your AI tools — Claude.ai, ChatGPT, Gemini, mobile — you need it running on a public URL with HTTPS.
+
+### What you need
+
+- A VPS (Hetzner CX22 at ~4 EUR/month is plenty — EU jurisdiction, GDPR)
+- A domain (or subdomain) pointed at the VPS
+- ~20 minutes
+
+### Step 1: Set up the server
+
+SSH into your VPS and install Docker:
+
+```bash
+# Firewall
+ufw default deny incoming && ufw default allow outgoing
+ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp
+ufw enable
+
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+```
+
+### Step 2: Point your domain
+
+Add an A record in your DNS provider:
+
+```
+Type: A
+Name: hippo            (or whatever subdomain you want)
+Value: <your VPS IP>
+```
+
+DNS propagation usually takes a few minutes. Verify it resolves before continuing:
+
+```bash
+dig hippo.yourdomain.com +short
+# Should return your VPS IP
+```
+
+### Step 3: Configure
+
+```bash
+git clone https://github.com/karrolcia/hippocampus.git
+cd hippocampus
+cp .env.example .env
+```
+
+Generate a passphrase and an OAuth password hash:
+
+```bash
+# Generate a random passphrase — save this in your password manager
+openssl rand -base64 32
+
+# Generate a hash of the password you'll use to log in
+# Replace 'your-password' with your actual password
+node -e "
+  const { createHash } = require('crypto');
+  const hash = createHash('sha256')
+    .update('your-password')
+    .digest('base64url');
+  console.log(hash);
+"
+```
+
+Edit `.env` with all required values:
+
+```env
+HIPPO_PASSPHRASE=<output of openssl rand -base64 32>
+
+HIPPO_OAUTH_ISSUER=https://hippo.yourdomain.com
+HIPPO_OAUTH_USER=admin
+HIPPO_OAUTH_PASSWORD_HASH=<output of the node command above>
+```
+
+Edit `Caddyfile` — replace the domain on the first line:
+
+```caddy
+hippo.yourdomain.com {
+```
+
+That's the only line you change. Caddy handles TLS certificates automatically via Let's Encrypt.
+
+### Step 4: Start and verify
+
+```bash
+docker compose up -d
+```
+
+Wait ~30 seconds for the containers to start and Caddy to get a certificate, then:
+
+```bash
+curl https://hippo.yourdomain.com/health
+```
+
+Expected response:
+
+```json
+{"status":"ok","version":"0.1.0"}
+```
+
+If you get a certificate error, DNS might not have propagated yet. Wait a few minutes and retry.
+
+### Step 5: Connect your AI tools
+
+Now that your server is live, connect each platform you use.
+
+**Claude Code:**
+
+```bash
+claude mcp add hippocampus --transport http https://hippo.yourdomain.com/mcp
+```
+
+**Claude.ai (browser + mobile):**
+
+Settings > Integrations > Add custom integration > Enter your server URL:
+
+```
+https://hippo.yourdomain.com/mcp
+```
+
+You'll be redirected to log in with the username and password you configured in Step 3.
+
+**Claude Desktop:**
+
+Add to your MCP config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "hippocampus": {
+      "url": "https://hippo.yourdomain.com/mcp"
+    }
+  }
+}
+```
+
+**ChatGPT (web + mobile):**
+
+Settings > Apps > Developer Mode > Create a new app > Set server URL to `https://hippo.yourdomain.com/mcp`
+
+**Gemini CLI:**
+
+Add to `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "hippocampus": {
+      "uri": "https://hippo.yourdomain.com/mcp"
+    }
+  }
+}
+```
+
+**Cursor / Windsurf / VS Code:**
+
+Add to your MCP configuration file:
+
+```json
+{
+  "mcpServers": {
+    "hippocampus": {
+      "url": "https://hippo.yourdomain.com/mcp"
+    }
+  }
+}
+```
+
+**Verify:** Open any connected platform and ask your AI to remember something. Switch to a different platform and ask it to recall. If it works across platforms, you're done.
+
+### Alternative: Fly.io
+
+If you don't want to manage a VPS. ~$5/month.
+
+```bash
+git clone https://github.com/karrolcia/hippocampus.git
+cd hippocampus
+
+fly launch                # Creates app + Dockerfile detected automatically
+fly volumes create hippo_data --size 1
+
+# Set secrets
+fly secrets set HIPPO_PASSPHRASE=$(openssl rand -base64 32)
+fly secrets set HIPPO_OAUTH_ISSUER=https://<your-app>.fly.dev
+fly secrets set HIPPO_OAUTH_USER=admin
+fly secrets set HIPPO_OAUTH_PASSWORD_HASH=<your hash>
+
+fly deploy
+```
+
+Verify:
+
+```bash
+curl https://<your-app>.fly.dev/health
+```
+
+Fly handles HTTPS automatically. Connect your AI tools using `https://<your-app>.fly.dev/mcp` as the server URL.
+
+### Alternative: Home server + Cloudflare Tunnel
+
+Free, maximum control. Run Hippocampus on any machine at home and expose it via [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/) — no port forwarding, no static IP needed.
+
+```bash
+# On your home machine
+git clone https://github.com/karrolcia/hippocampus.git
+cd hippocampus
+cp .env.example .env
+# Edit .env: set HIPPO_PASSPHRASE and OAuth vars (same as VPS setup)
+
+docker compose up -d
+
+# Install and configure cloudflared
+cloudflared tunnel create hippocampus
+cloudflared tunnel route dns hippocampus hippo.yourdomain.com
+cloudflared tunnel run hippocampus
+```
+
+You're responsible for uptime and physical security. See [SECURITY.md](SECURITY.md) for trade-offs.
 
 ## Tools
 
@@ -50,185 +342,6 @@ Data model: knowledge graph with entities, observations, and relationships. Sema
 | `export` | Export as CLAUDE.md context file, readable markdown, or JSON |
 
 The AI calls these tools naturally. You don't manage memory manually — you just talk to your AI and it remembers.
-
-## Quick start
-
-### Prerequisites
-
-- Node.js 18+ (or Docker)
-- A passphrase for database encryption
-
-### Local development
-
-```bash
-git clone https://github.com/karrolcia/hippocampus.git
-cd hippocampus
-npm install
-
-# Create .env
-cp .env.example .env
-# Edit .env — set HIPPO_PASSPHRASE (required)
-
-npm run dev
-```
-
-The server starts on `http://localhost:3000`. The embedding model (~80MB) downloads automatically on first run.
-
-### Docker
-
-```bash
-git clone https://github.com/karrolcia/hippocampus.git
-cd hippocampus
-
-# Generate a passphrase and save it in your password manager
-openssl rand -base64 32
-
-# Create .env
-cp .env.example .env
-# Edit .env — set HIPPO_PASSPHRASE
-
-docker compose up -d
-```
-
-This starts Hippocampus + Caddy (automatic HTTPS). Edit the `Caddyfile` to set your domain.
-
-## Connecting AI platforms
-
-### Claude Code
-
-```bash
-claude mcp add hippocampus --transport http https://hippo.yourdomain.com/mcp
-```
-
-For local development:
-
-```bash
-claude mcp add hippocampus --transport http http://localhost:3000/mcp
-```
-
-### Claude.ai
-
-Settings > Integrations > Add custom integration > Enter your server URL: `https://hippo.yourdomain.com/mcp`
-
-Requires OAuth — see [OAuth setup](#oauth-setup) below.
-
-### Claude Desktop
-
-Add to your MCP config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
-
-```json
-{
-  "mcpServers": {
-    "hippocampus": {
-      "url": "https://hippo.yourdomain.com/mcp"
-    }
-  }
-}
-```
-
-### ChatGPT
-
-Settings > Apps > Developer Mode > Create a new app > Set server URL to `https://hippo.yourdomain.com/mcp`
-
-### Gemini CLI
-
-Add to `~/.gemini/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "hippocampus": {
-      "uri": "https://hippo.yourdomain.com/mcp"
-    }
-  }
-}
-```
-
-### Cursor / Windsurf / VS Code
-
-Add to your MCP configuration file:
-
-```json
-{
-  "mcpServers": {
-    "hippocampus": {
-      "url": "https://hippo.yourdomain.com/mcp"
-    }
-  }
-}
-```
-
-## Self-hosting
-
-Hippocampus is designed to run on a cheap VPS. The database is encrypted — even if someone steals the disk, they get nothing without your passphrase.
-
-### Recommended: Hetzner VPS
-
-EU jurisdiction (GDPR), Helsinki or Stockholm datacenter. CX22 instance (2 vCPU, 4GB RAM) costs ~4 EUR/month.
-
-```bash
-# SSH into your VPS
-
-# Firewall
-ufw default deny incoming && ufw default allow outgoing
-ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp
-ufw enable
-
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-
-# Clone and deploy
-git clone https://github.com/karrolcia/hippocampus.git
-cd hippocampus
-
-# Generate passphrase — SAVE THIS IN YOUR PASSWORD MANAGER
-openssl rand -base64 32
-
-# Configure
-cp .env.example .env
-# Edit .env: set HIPPO_PASSPHRASE, HIPPO_OAUTH_ISSUER, HIPPO_OAUTH_USER, HIPPO_OAUTH_PASSWORD_HASH
-# Edit Caddyfile: replace memory.yourdomain.com with your domain
-
-# Start
-docker compose up -d
-```
-
-Caddy handles TLS certificates automatically via Let's Encrypt.
-
-### Alternative: Fly.io (~$5/month)
-
-```bash
-git clone https://github.com/karrolcia/hippocampus.git && cd hippocampus
-fly launch
-fly secrets set HIPPO_PASSPHRASE=$(openssl rand -base64 32)
-fly volumes create hippo_data --size 1
-fly deploy
-```
-
-### Alternative: Home server + Cloudflare Tunnel
-
-Free, maximum control. You're responsible for uptime and physical security. See [SECURITY.md](SECURITY.md) for trade-offs.
-
-## OAuth setup
-
-Remote MCP connections (Claude.ai, ChatGPT, Gemini) require OAuth 2.1. Hippocampus includes a self-contained OAuth server for single-user authentication.
-
-```bash
-# Generate a password hash
-node -e "const{createHash}=require('crypto');console.log(createHash('sha256').update('your-password').digest('base64url'))"
-
-# Add to .env
-HIPPO_OAUTH_ISSUER=https://hippo.yourdomain.com
-HIPPO_OAUTH_USER=your-username
-HIPPO_OAUTH_PASSWORD_HASH=<output from above>
-```
-
-This enables:
-- Dynamic Client Registration (AI platforms auto-register)
-- Authorization Code Flow with PKCE
-- Short-lived access tokens (1 hour) with refresh token rotation (30 days)
-
-For local development without OAuth, set `HIPPO_TOKEN` in `.env` and pass it as a Bearer token.
 
 ## Configuration
 
@@ -260,7 +373,29 @@ For local development without OAuth, set `HIPPO_TOKEN` in `.env` and pass it as 
 
 See [SECURITY.md](SECURITY.md) for the full threat model and architecture.
 
-## Architecture
+## OAuth — what's happening under the hood
+
+When you connect Claude.ai, ChatGPT, or other browser-based platforms, they use OAuth 2.1 to authenticate with your server. Hippocampus includes a self-contained OAuth server — no external auth provider needed.
+
+Here's what happens when you click "Connect" in Claude.ai:
+
+1. Claude.ai auto-registers as a client with your server (Dynamic Client Registration, RFC 7591)
+2. You're redirected to a login page on your server
+3. You enter the username and password from your `.env`
+4. Your server issues a short-lived access token (1 hour) and a refresh token (30 days)
+5. Claude.ai uses the access token for MCP requests, refreshes automatically when it expires
+
+The three `.env` variables that enable this:
+
+- `HIPPO_OAUTH_ISSUER` — your server's public URL (tells Hippocampus to turn on OAuth)
+- `HIPPO_OAUTH_USER` — your login username
+- `HIPPO_OAUTH_PASSWORD_HASH` — SHA-256 hash of your password (the server never stores your plaintext password)
+
+For local development, you can skip OAuth entirely by setting `HIPPO_TOKEN` in `.env` and passing it as a Bearer token.
+
+## Contributing
+
+### Architecture
 
 ```
 src/
@@ -283,7 +418,7 @@ src/
 
 **Stack:** Node.js, TypeScript, Hono, MCP SDK, SQLCipher, Transformers.js
 
-## Running tests
+### Running tests
 
 ```bash
 # Full end-to-end test suite (all 9 tools, real embeddings, temp encrypted DB)
