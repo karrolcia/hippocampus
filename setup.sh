@@ -17,6 +17,13 @@ if [ ! -f .env.example ]; then
     exit 1
 fi
 
+# Check for existing files
+if [ -f .env ]; then
+    printf ".env already exists. Overwrite? [y/N]: "
+    read -r confirm
+    case "$confirm" in y|Y) ;; *) printf "Aborted.\n"; exit 0 ;; esac
+fi
+
 # --- Gather input ---
 
 printf "Domain (e.g., hippo.example.com): "

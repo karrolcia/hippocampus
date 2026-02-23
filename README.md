@@ -304,13 +304,16 @@ Edit the generated `fly.toml` — add a volume mount so the database persists ac
   destination = "/data"
 ```
 
-Then set secrets and deploy:
+Generate a password hash and set secrets:
 
 ```bash
+# Generate hash of your login password (replace 'your-password')
+echo -n 'your-password' | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='
+
 fly secrets set HIPPO_PASSPHRASE=$(openssl rand -base64 32)
 fly secrets set HIPPO_OAUTH_ISSUER=https://<your-app>.fly.dev
 fly secrets set HIPPO_OAUTH_USER=admin
-fly secrets set HIPPO_OAUTH_PASSWORD_HASH=<your hash>
+fly secrets set HIPPO_OAUTH_PASSWORD_HASH=<output from above>
 
 fly deploy
 ```
@@ -332,8 +335,24 @@ Free, maximum control. Run Hippocampus on any machine at home and expose it via 
 git clone https://github.com/karrolcia/hippocampus.git
 cd hippocampus
 cp .env.example .env
-# Edit .env: set HIPPO_PASSPHRASE and OAuth vars (same as VPS setup)
+```
 
+Edit `.env` — set passphrase and OAuth variables (skip `setup.sh` here — it configures Caddy, which you don't need with Cloudflare Tunnel):
+
+```bash
+# Generate values
+openssl rand -base64 32                # → HIPPO_PASSPHRASE
+echo -n 'your-password' | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='  # → HIPPO_OAUTH_PASSWORD_HASH
+```
+
+```env
+HIPPO_PASSPHRASE=<generated passphrase>
+HIPPO_OAUTH_ISSUER=https://hippo.yourdomain.com
+HIPPO_OAUTH_USER=admin
+HIPPO_OAUTH_PASSWORD_HASH=<generated hash>
+```
+
+```bash
 docker compose up -d
 
 # Install cloudflared and create a tunnel
