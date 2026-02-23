@@ -152,6 +152,18 @@ dig hippo.yourdomain.com +short
 ```bash
 git clone https://github.com/karrolcia/hippocampus.git
 cd hippocampus
+chmod +x setup.sh
+./setup.sh
+```
+
+The script asks for your domain, username, and password, then writes `.env` and `Caddyfile` for you. No Node.js required.
+
+Caddy handles TLS certificates automatically via Let's Encrypt.
+
+<details>
+<summary>Manual setup (if you prefer)</summary>
+
+```bash
 cp .env.example .env
 ```
 
@@ -163,13 +175,7 @@ openssl rand -base64 32
 
 # Generate a hash of the password you'll use to log in
 # Replace 'your-password' with your actual password
-node -e "
-  const { createHash } = require('crypto');
-  const hash = createHash('sha256')
-    .update('your-password')
-    .digest('base64url');
-  console.log(hash);
-"
+echo -n 'your-password' | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='
 ```
 
 Edit `.env` with all required values:
@@ -179,7 +185,7 @@ HIPPO_PASSPHRASE=<output of openssl rand -base64 32>
 
 HIPPO_OAUTH_ISSUER=https://hippo.yourdomain.com
 HIPPO_OAUTH_USER=admin
-HIPPO_OAUTH_PASSWORD_HASH=<output of the node command above>
+HIPPO_OAUTH_PASSWORD_HASH=<output of the hash command above>
 ```
 
 Edit `Caddyfile` — replace the domain on the first line:
@@ -188,7 +194,7 @@ Edit `Caddyfile` — replace the domain on the first line:
 hippo.yourdomain.com {
 ```
 
-That's the only line you change. Caddy handles TLS certificates automatically via Let's Encrypt.
+</details>
 
 ### Step 4: Start and verify
 
