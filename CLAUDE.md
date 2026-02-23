@@ -40,6 +40,9 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - **Decay-weighted retrieval**: `score = similarity * (1 + 0.1 * log(1 + recall_count)) * importance`. Gentle boost from access tracking — similarity stays the dominant signal. recall_count=0 → neutral (no penalty), recall_count=100 → ~1.46x boost.
 - **Observation importance**: Schema V4 — `importance REAL DEFAULT 1.0` per observation. Manual override for always-relevant facts. Set via `remember` tool's `importance` param (0.0-1.0). Multiplied into recall scoring.
 - **Entity merge**: `merge_entities` tool — structural consolidation companion to `consolidate mode: "entities"`. Moves observations, embeddings, relationships atomically in a transaction, then deletes source entities.
+- **Observation kind**: Schema V5 — optional `kind TEXT` per observation. Free-text, not enum — tool descriptions suggest `fact`, `decision`, `question`, `preference`. Filterable in both `recall` and `semanticSearch`. Included in JSON export. NULL for existing observations (backward compatible).
+- **Spreading activation**: `recall` with `spread: true` — after base semantic+keyword search, follows relationships 1 hop from matched entities, scores related observations against the query, dampens by `SPREAD_DECAY = 0.5`, merges into results. Refactored `semanticSearch` into `semanticSearchWithVector` to avoid redundant embedding generation when spreading.
+- **Contradiction detection**: `consolidate mode: "contradictions"` — finds observation pairs with high embedding similarity (same topic, default threshold 0.6) but low Jaccard word-set overlap (< 0.3). Surfaces conflicting claims for human review. No LLM needed — pure embedding math + lexical comparison.
 
 ## Security Rules
 - NEVER log memory content, observation text, embeddings, tokens, or passphrase

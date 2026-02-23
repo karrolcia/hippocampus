@@ -389,17 +389,25 @@ You're responsible for uptime and physical security. See [SECURITY.md](SECURITY.
 
 | Tool | Description |
 |------|-------------|
-| `remember` | Store a fact, preference, or piece of context |
-| `recall` | Search memories by semantic similarity + keyword match |
+| `remember` | Store a fact, preference, or piece of context. Optional `kind` classification (fact, decision, question, preference, or custom) and `importance` weighting. |
+| `recall` | Search memories by semantic similarity + keyword match. Filter by `type`, `kind`, `since`. Use `spread: true` to follow relationships and discover connected memories. |
 | `context` | Get everything about a topic — observations, relationships, related entities |
 | `update` | Replace an existing observation with new content |
 | `forget` | Permanently delete a memory or entity (secure deletion) |
 | `merge` | Merge multiple observations into one (atomic consolidation) |
 | `merge_entities` | Merge multiple entities into one — moves all data, deletes sources |
-| `consolidate` | Find clusters of similar/duplicate memories for review |
-| `export` | Export as CLAUDE.md context file, readable markdown, or JSON |
+| `consolidate` | Find clusters of similar/duplicate memories, detect near-duplicate entities, or surface potential contradictions |
+| `export` | Export as CLAUDE.md context file, readable markdown, JSON, wire format, or Obsidian vault |
 
 The AI calls these tools naturally. You don't manage memory manually — you just talk to your AI and it remembers.
+
+### Spreading activation
+
+When you `recall` with `spread: true`, Hippocampus doesn't just return direct matches — it follows relationships one hop out from matched entities and scores their observations against your query. Related observations get a dampened score (0.5x decay), so they surface when relevant but don't drown out direct hits. Useful for questions that span multiple related topics.
+
+### Contradiction detection
+
+`consolidate` with `mode: "contradictions"` finds observation pairs that talk about the same thing (high embedding similarity) but say different things (low word overlap). No LLM required — pure embedding math plus Jaccard comparison. Review the flagged pairs and decide what to keep.
 
 ## Configuration
 
