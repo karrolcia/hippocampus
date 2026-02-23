@@ -3,8 +3,8 @@ services:
     build: .
     container_name: hippocampus
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     environment:
       - HIPPO_PASSPHRASE=${HIPPO_PASSPHRASE}
       - HIPPO_DB_PATH=/data/hippocampus.db

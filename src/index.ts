@@ -2,7 +2,7 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { config } from './config.js';
+import { config, VERSION } from './config.js';
 import { initDatabase, closeDatabase } from './db/index.js';
 import { createMcpServer } from './mcp/server.js';
 import { createRateLimiter } from './middleware/rate-limit.js';
@@ -32,7 +32,7 @@ app.use(
 
 // Health check
 app.get('/health', (c) => {
-  return c.json({ status: 'ok', version: '0.1.0' });
+  return c.json({ status: 'ok', version: VERSION });
 });
 
 // Mount OAuth routes when configured

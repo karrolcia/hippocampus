@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { VERSION } from '../config.js';
 import { remember } from './tools/remember.js';
 import { recall } from './tools/recall.js';
 import { forget } from './tools/forget.js';
@@ -14,7 +15,7 @@ import { registerContextResources } from './resources/context.js';
 export function createMcpServer(): McpServer {
   const server = new McpServer({
     name: 'hippocampus',
-    version: '0.1.0',
+    version: VERSION,
   });
 
   server.tool(
@@ -157,7 +158,7 @@ export function createMcpServer(): McpServer {
     },
     async (args) => {
       try {
-        const result = forget({
+        const result = await forget({
           entity: args.entity,
           observation_id: args.observation_id,
         });
@@ -298,7 +299,7 @@ export function createMcpServer(): McpServer {
     },
     async (args) => {
       try {
-        const result = mergeEntities({
+        const result = await mergeEntities({
           source_entities: args.source_entities,
           target_entity: args.target_entity.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
           target_type: args.target_type,
@@ -438,7 +439,7 @@ export function createMcpServer(): McpServer {
     },
     async (args) => {
       try {
-        const result = exportMemories({
+        const result = await exportMemories({
           format: args.format,
           entity: args.entity,
           type: args.type,
