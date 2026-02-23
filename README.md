@@ -502,7 +502,7 @@ HIPPO_PASSPHRASE=test HIPPO_DB_PATH=/tmp/hippo-test.db npx tsx test-all-tools.ts
 
 ## License
 
-MIT
+AGPL-3.0 — free to use, modify, and self-host. If you run a modified version as a network service, you must open-source your changes under the same license.
 
 ## Support
 
