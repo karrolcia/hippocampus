@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/index.js';
+import { cosineSimilarity } from './similarity.js';
 
 const EMBEDDING_DIM = 384;
 const EMBEDDING_BYTES = EMBEDDING_DIM * 4; // Float32 = 4 bytes
@@ -170,10 +171,7 @@ export async function semanticSearch(
       row.vector.byteOffset,
       EMBEDDING_DIM
     );
-    let similarity = 0;
-    for (let i = 0; i < EMBEDDING_DIM; i++) {
-      similarity += queryVector[i] * storedVector[i];
-    }
+    const similarity = cosineSimilarity(queryVector, storedVector);
     return {
       observation_id: row.observation_id,
       entity_id: row.entity_id,

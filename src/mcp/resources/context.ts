@@ -3,6 +3,7 @@ import { listEntities, findEntityByName } from '../../db/entities.js';
 import { getObservationsByEntity } from '../../db/observations.js';
 import { getRelationshipsByEntity, getRelatedEntities } from '../../db/relationships.js';
 import { formatClaudeMd, gatherEntityData } from '../tools/export.js';
+import { config } from '../../config.js';
 
 export function registerContextResources(server: McpServer): void {
   // Full context — entire knowledge graph in compact claude-md format
@@ -26,7 +27,7 @@ export function registerContextResources(server: McpServer): void {
       }
 
       const entitiesData = gatherEntityData(entities);
-      const markdown = formatClaudeMd(entitiesData);
+      const markdown = formatClaudeMd(entitiesData, config.contextMaxObservations);
 
       return {
         contents: [{

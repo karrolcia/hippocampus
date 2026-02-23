@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3-multiple-ciphers';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_V1_SQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -54,16 +54,31 @@ CREATE INDEX IF NOT EXISTS idx_relationships_to ON relationships(to_entity);
 CREATE INDEX IF NOT EXISTS idx_relationships_type ON relationships(relation_type);
 `;
 
+const SCHEMA_V3_SQL = `
+ALTER TABLE observations ADD COLUMN last_recalled_at TEXT;
+ALTER TABLE observations ADD COLUMN recall_count INTEGER DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_observations_recall_count ON observations(recall_count);
+`;
+
 export function initializeSchema(db: Database.Database): void {
   db.exec(SCHEMA_V1_SQL);
 
   const versionRow = db.prepare('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | undefined;
+  const currentVersion = versionRow?.version ?? 0;
+
+  if (currentVersion < 2) {
+    db.exec(SCHEMA_V2_SQL);
+  }
+
+  if (currentVersion < 3) {
+    // V3: access tracking columns on observations
+    // ALTER TABLE ADD COLUMN is safe — no table rebuild, defaults apply to existing rows
+    db.exec(SCHEMA_V3_SQL);
+  }
 
   if (!versionRow) {
-    db.exec(SCHEMA_V2_SQL);
     db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
-  } else if (versionRow.version < 2) {
-    db.exec(SCHEMA_V2_SQL);
+  } else if (currentVersion < SCHEMA_VERSION) {
     db.prepare('UPDATE schema_version SET version = ?').run(SCHEMA_VERSION);
   }
 }

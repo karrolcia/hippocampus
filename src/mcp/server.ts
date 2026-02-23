@@ -18,13 +18,13 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'remember',
-    'Store a memory or piece of information. Use this to save facts, preferences, context, or anything worth remembering about the user or conversation.',
+    'Store a memory or piece of information. Use this to save facts, preferences, context, or anything worth remembering about the user or conversation. Prefer telegraphic form over full sentences — "PhD atmospheric physics, TU Delft" not "Karolina has a PhD in atmospheric physics from TU Delft". Drop articles, pronouns, and filler. One fact per memory when possible.',
     {
       content: z
         .string()
         .min(1)
         .max(2000)
-        .describe('The information to remember (max 2000 chars)'),
+        .describe('The information to remember (max 2000 chars). Use compact, telegraphic style. Example: "PhD atmospheric physics, TU Delft" instead of "She has a PhD in atmospheric physics from TU Delft."'),
       entity: z
         .string()
         .max(200)
@@ -97,6 +97,10 @@ export function createMcpServer(): McpServer {
         .string()
         .optional()
         .describe('Only return memories after this ISO date'),
+      format: z
+        .enum(['full', 'compact'])
+        .default('full')
+        .describe('"full" (JSON with all fields) or "compact" (grouped markdown, minimal tokens). Use compact unless you need observation IDs.'),
     },
     async (args) => {
       try {
@@ -105,6 +109,7 @@ export function createMcpServer(): McpServer {
           limit: args.limit,
           type: args.type,
           since: args.since,
+          format: args.format,
         });
         return {
           content: [
@@ -322,12 +327,17 @@ export function createMcpServer(): McpServer {
         .max(1.0)
         .default(0.8)
         .describe('Cosine similarity threshold for clustering (0.5-1.0, default 0.8). Lower = more aggressive grouping.'),
+      mode: z
+        .enum(['observations', 'entities'])
+        .default('observations')
+        .describe('"observations" (default) finds similar observations to merge. "entities" finds entity names that likely refer to the same thing.'),
     },
     async (args) => {
       try {
-        const result = consolidate({
+        const result = await consolidate({
           entity: args.entity,
           threshold: args.threshold,
+          mode: args.mode,
         });
         return {
           content: [

@@ -3,6 +3,7 @@ import { findOrCreateEntity, listEntities, type Entity } from '../../db/entities
 import { createObservation, deleteObservation } from '../../db/observations.js';
 import { createRelationship, relationshipExists } from '../../db/relationships.js';
 import { generateEmbedding, storeEmbedding, getEmbeddingsByEntity, deleteEmbedding } from '../../embeddings/embedder.js';
+import { cosineSimilarity } from '../../embeddings/similarity.js';
 
 const DEDUP_THRESHOLD = 0.85;
 
@@ -32,14 +33,6 @@ export interface RememberResult {
   message: string;
   deduplicated?: boolean;
   replaced_observation?: string;
-}
-
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  let dot = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-  }
-  return dot;
 }
 
 export async function remember(input: RememberInput): Promise<RememberResult> {

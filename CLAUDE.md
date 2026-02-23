@@ -32,6 +32,11 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - **Consolidate = clustering only**: Hippocampus identifies duplicate clusters (embedding math). The AI does the merging (language intelligence). Each does what it's good at. The AI calls `merge` to finalize.
 - **Dedup on write**: `remember` checks for near-duplicates (cosine similarity >= 0.85) on the same entity before storing. If existing content is longer/equal, skips. If new content is longer, replaces. Conservative threshold — only catches near-verbatim repeats.
 - **Merge = atomic consolidation**: Single tool call replaces multi-step `remember` + N x `forget` dance. AI provides merged text + observation IDs, Hippocampus handles the rest.
+- **Storage guidance**: Tool descriptions encourage telegraphic form ("PhD atmospheric physics, TU Delft" not full sentences) to reduce per-observation token cost.
+- **Compact recall format**: `format: "compact"` returns grouped markdown (~4x fewer tokens than full JSON). `format: "full"` (default) returns current shape for backward compat.
+- **Budgeted context**: `hippocampus://context` resource capped at `HIPPO_CONTEXT_MAX_OBSERVATIONS` (default 100). Prioritizes most-recently-updated entities, partial-includes the last entity at the budget boundary.
+- **Access tracking**: Schema V3 adds `recall_count` + `last_recalled_at` per observation. Foundation for decay-weighted retrieval. Updated on every recall match.
+- **Entity resolution**: `consolidate mode: "entities"` embeds entity names, clusters by cosine similarity (default threshold 0.7). Detection only — AI decides what to merge. Surfaces cross-entity redundancy invisible to per-entity dedup.
 
 ## Security Rules
 - NEVER log memory content, observation text, embeddings, tokens, or passphrase

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { searchObservations, type ObservationWithEntity } from '../../db/observations.js';
+import { searchObservations, touchRecalledObservations, type ObservationWithEntity } from '../../db/observations.js';
 import { semanticSearch, type SemanticSearchResult } from '../../embeddings/embedder.js';
 
 export const recallSchema = z.object({
@@ -10,6 +10,7 @@ export const recallSchema = z.object({
   limit: z.coerce.number().min(1).max(50).default(10),
   type: z.string().max(50).optional(),
   since: z.string().datetime().optional(),
+  format: z.enum(['full', 'compact']).default('full'),
 });
 
 export type RecallInput = z.infer<typeof recallSchema>;
@@ -32,7 +33,13 @@ export interface RecallResult {
   memories: MemoryResult[];
 }
 
-export async function recall(input: RecallInput): Promise<RecallResult> {
+export interface RecallCompactResult {
+  success: boolean;
+  count: number;
+  text: string;
+}
+
+export async function recall(input: RecallInput): Promise<RecallResult | RecallCompactResult> {
   // Run semantic and keyword search in parallel
   const [semanticResults, keywordResults] = await Promise.all([
     semanticSearch(input.query, {
@@ -81,11 +88,52 @@ export async function recall(input: RecallInput): Promise<RecallResult> {
 
   const limited = memories.slice(0, input.limit);
 
+  // Track access for recall-frequency analysis
+  if (limited.length > 0) {
+    touchRecalledObservations(limited.map(m => m.observation_id));
+  }
+
+  if (input.format === 'compact') {
+    return {
+      success: true,
+      count: limited.length,
+      text: formatCompact(limited),
+    };
+  }
+
   return {
     success: true,
     count: limited.length,
     memories: limited,
   };
+}
+
+function formatCompact(memories: MemoryResult[]): string {
+  if (memories.length === 0) return '';
+
+  // Group by entity
+  const groups = new Map<string, { type: string | null; items: MemoryResult[] }>();
+  for (const m of memories) {
+    const existing = groups.get(m.entity);
+    if (existing) {
+      existing.items.push(m);
+    } else {
+      groups.set(m.entity, { type: m.type, items: [m] });
+    }
+  }
+
+  const sections: string[] = [];
+  for (const [entity, { type, items }] of groups) {
+    const typeStr = type ? ` (${type})` : '';
+    const lines = [`**${entity}**${typeStr}`];
+    for (const item of items) {
+      const simStr = item.similarity !== undefined ? ` [${item.similarity.toFixed(2)}]` : '';
+      lines.push(`- ${item.content}${simStr}`);
+    }
+    sections.push(lines.join('\n'));
+  }
+
+  return sections.join('\n\n');
 }
 
 function formatObservation(obs: ObservationWithEntity): MemoryResult {

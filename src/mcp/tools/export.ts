@@ -116,11 +116,46 @@ export function deduplicateRelationships(entitiesData: EntityData[]): Relationsh
   return unique;
 }
 
-/** Compact context file — entities grouped by type, observations as bullets. */
-export function formatClaudeMd(entitiesData: EntityData[]): string {
-  const grouped = new Map<string, EntityData[]>();
+/**
+ * Trim entities data to fit within an observation budget.
+ * Entities are already sorted by updated_at DESC from listEntities.
+ * Includes full entities until budget is hit, then partial-includes the
+ * last entity (newest observations first, since getObservationsByEntity
+ * returns created_at DESC).
+ */
+export function budgetTrim(entitiesData: EntityData[], maxObservations: number): EntityData[] {
+  const result: EntityData[] = [];
+  let remaining = maxObservations;
 
   for (const ed of entitiesData) {
+    if (remaining <= 0) break;
+
+    if (ed.observations.length <= remaining) {
+      result.push(ed);
+      remaining -= ed.observations.length;
+    } else {
+      // Partial include — take first `remaining` observations (already ordered newest-first)
+      result.push({
+        entity: ed.entity,
+        observations: ed.observations.slice(0, remaining),
+        relationships: ed.relationships,
+      });
+      remaining = 0;
+    }
+  }
+
+  return result;
+}
+
+/** Compact context file — entities grouped by type, observations as bullets. */
+export function formatClaudeMd(entitiesData: EntityData[], maxObservations?: number): string {
+  const trimmed = maxObservations !== undefined
+    ? budgetTrim(entitiesData, maxObservations)
+    : entitiesData;
+
+  const grouped = new Map<string, EntityData[]>();
+
+  for (const ed of trimmed) {
     const typeLabel = ed.entity.type ?? 'general';
     if (!grouped.has(typeLabel)) {
       grouped.set(typeLabel, []);

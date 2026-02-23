@@ -8,6 +8,8 @@ export interface Observation {
   content: string;
   source: string | null;
   created_at: string;
+  last_recalled_at: string | null;
+  recall_count: number;
 }
 
 export interface ObservationWithEntity extends Observation {
@@ -99,6 +101,18 @@ export function deleteObservationsByEntity(entityId: string): number {
   const db = getDatabase();
   const result = db.prepare('DELETE FROM observations WHERE entity_id = ?').run(entityId);
   return result.changes;
+}
+
+export function touchRecalledObservations(ids: string[]): void {
+  if (ids.length === 0) return;
+  const db = getDatabase();
+  const placeholders = ids.map(() => '?').join(',');
+  db.prepare(`
+    UPDATE observations
+    SET last_recalled_at = datetime('now'),
+        recall_count = recall_count + 1
+    WHERE id IN (${placeholders})
+  `).run(...ids);
 }
 
 export function deleteObservation(id: string): boolean {

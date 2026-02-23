@@ -15,6 +15,7 @@ const configSchema = z.object({
   oauthUser: z.string().optional(),
   oauthPasswordHash: z.string().optional(),
   transformersCache: z.string().optional(),
+  contextMaxObservations: z.coerce.number().min(10).max(10000).default(100),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -32,6 +33,7 @@ function loadConfig(): Config {
     oauthUser: process.env.HIPPO_OAUTH_USER,
     oauthPasswordHash: process.env.HIPPO_OAUTH_PASSWORD_HASH,
     transformersCache: process.env.TRANSFORMERS_CACHE,
+    contextMaxObservations: process.env.HIPPO_CONTEXT_MAX_OBSERVATIONS,
   });
 
   if (!result.success) {
