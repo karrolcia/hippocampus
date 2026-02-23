@@ -304,16 +304,23 @@ Edit the generated `fly.toml` — add a volume mount so the database persists ac
   destination = "/data"
 ```
 
-Generate a password hash and set secrets:
+Generate your secrets — save both values in your password manager:
 
 ```bash
+# Generate passphrase (save this — you lose your database without it)
+openssl rand -base64 32
+
 # Generate hash of your login password (replace 'your-password')
 echo -n 'your-password' | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='
+```
 
-fly secrets set HIPPO_PASSPHRASE=$(openssl rand -base64 32)
+Set them as Fly secrets and deploy:
+
+```bash
+fly secrets set HIPPO_PASSPHRASE=<generated passphrase>
 fly secrets set HIPPO_OAUTH_ISSUER=https://<your-app>.fly.dev
 fly secrets set HIPPO_OAUTH_USER=admin
-fly secrets set HIPPO_OAUTH_PASSWORD_HASH=<output from above>
+fly secrets set HIPPO_OAUTH_PASSWORD_HASH=<generated hash>
 
 fly deploy
 ```
@@ -353,7 +360,7 @@ HIPPO_OAUTH_PASSWORD_HASH=<generated hash>
 ```
 
 ```bash
-docker compose up -d
+docker compose up -d hippocampus   # only hippocampus — Caddy not needed
 
 # Install cloudflared and create a tunnel
 cloudflared tunnel create hippocampus
