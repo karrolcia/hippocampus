@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3-multiple-ciphers';
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 const SCHEMA_V1_SQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -64,6 +64,11 @@ const SCHEMA_V4_SQL = `
 ALTER TABLE observations ADD COLUMN importance REAL DEFAULT 1.0;
 `;
 
+const SCHEMA_V5_SQL = `
+ALTER TABLE observations ADD COLUMN kind TEXT;
+CREATE INDEX IF NOT EXISTS idx_observations_kind ON observations(kind);
+`;
+
 export function initializeSchema(db: Database.Database): void {
   db.exec(SCHEMA_V1_SQL);
 
@@ -84,6 +89,12 @@ export function initializeSchema(db: Database.Database): void {
     // V4: observation importance for manual boost in recall ranking
     // ALTER TABLE ADD COLUMN with DEFAULT is safe — existing rows get 1.0 (neutral)
     db.exec(SCHEMA_V4_SQL);
+  }
+
+  if (currentVersion < 5) {
+    // V5: optional observation kind (fact, decision, question, preference, or custom)
+    // ALTER TABLE ADD COLUMN is safe — existing rows get NULL (no kind)
+    db.exec(SCHEMA_V5_SQL);
   }
 
   if (!versionRow) {

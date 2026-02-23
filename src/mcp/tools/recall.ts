@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { searchObservations, touchRecalledObservations, type ObservationWithEntity } from '../../db/observations.js';
-import { semanticSearch, type SemanticSearchResult } from '../../embeddings/embedder.js';
+import { findEntityByName } from '../../db/entities.js';
+import { getRelatedEntities } from '../../db/relationships.js';
+import { generateEmbedding, semanticSearchWithVector, getEmbeddingsByEntity, semanticSearch, type SemanticSearchResult } from '../../embeddings/embedder.js';
+import { cosineSimilarity } from '../../embeddings/similarity.js';
 
 export const recallSchema = z.object({
   query: z
@@ -10,12 +13,16 @@ export const recallSchema = z.object({
   limit: z.coerce.number().min(1).max(50).default(10),
   type: z.string().max(50).optional(),
   since: z.string().datetime().optional(),
+  kind: z.string().max(50).optional(),
+  spread: z.boolean().default(false),
   format: z.enum(['full', 'compact', 'wire', 'index']).default('full'),
 });
 
 export type RecallInput = z.infer<typeof recallSchema>;
 
 const SIMILARITY_THRESHOLD = 0.15;
+const SPREAD_DECAY = 0.5;
+const SPREAD_ALPHA = 0.1;
 
 interface MemoryResult {
   observation_id: string;
@@ -23,6 +30,7 @@ interface MemoryResult {
   type: string | null;
   content: string;
   source: string | null;
+  kind: string | null;
   remembered_at: string;
   similarity?: number;
 }
@@ -47,22 +55,31 @@ export interface RecallIndexResult {
 }
 
 export async function recall(input: RecallInput): Promise<RecallResult | RecallCompactResult | RecallIndexResult> {
-  // Run semantic and keyword search in parallel
-  const [semanticResults, keywordResults] = await Promise.all([
-    semanticSearch(input.query, {
-      limit: input.limit,
-      type: input.type,
-      since: input.since,
-    }).catch(() => [] as SemanticSearchResult[]),
-    Promise.resolve(
-      searchObservations({
-        query: input.query,
-        limit: input.limit,
-        type: input.type,
-        since: input.since,
-      })
-    ),
-  ]);
+  const searchOpts = {
+    limit: input.limit,
+    type: input.type,
+    since: input.since,
+    kind: input.kind,
+  };
+
+  let semanticResults: SemanticSearchResult[];
+  let queryVector: Float32Array | null = null;
+
+  if (input.spread) {
+    // Generate embedding once, reuse for base search + spreading
+    queryVector = await generateEmbedding(input.query);
+    semanticResults = semanticSearchWithVector(queryVector, searchOpts);
+  } else {
+    semanticResults = await semanticSearch(input.query, searchOpts).catch(() => [] as SemanticSearchResult[]);
+  }
+
+  const keywordResults = searchObservations({
+    query: input.query,
+    limit: input.limit,
+    type: input.type,
+    since: input.since,
+    kind: input.kind,
+  });
 
   // Merge and deduplicate by observation ID
   const seen = new Set<string>();
@@ -79,6 +96,7 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
         type: r.entity_type,
         content: r.content,
         source: r.source,
+        kind: r.kind,
         remembered_at: r.created_at,
         similarity: Math.round(r.similarity * 1000) / 1000,
       });
@@ -91,6 +109,48 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
       seen.add(obs.id);
       memories.push(formatObservation(obs));
     }
+  }
+
+  // Spreading activation: follow relationships 1 hop from matched entities
+  if (input.spread && queryVector) {
+    const matchedEntityNames = new Set(memories.map(m => m.entity));
+
+    for (const entityName of matchedEntityNames) {
+      const entity = findEntityByName(entityName);
+      if (!entity) continue;
+
+      const related = getRelatedEntities(entity.id, 1);
+      for (const [relatedId] of related) {
+        const vectors = getEmbeddingsByEntity(relatedId);
+        for (const v of vectors) {
+          if (seen.has(v.observation_id)) continue;
+          // Apply kind filter if set
+          if (input.kind && v.kind !== input.kind) continue;
+
+          const sim = cosineSimilarity(queryVector, v.vector);
+          const recallBoost = 1 + SPREAD_ALPHA * Math.log(1 + (v.recall_count ?? 0));
+          const importance = v.importance ?? 1.0;
+          const score = sim * recallBoost * importance * SPREAD_DECAY;
+
+          if (score >= SIMILARITY_THRESHOLD) {
+            seen.add(v.observation_id);
+            memories.push({
+              observation_id: v.observation_id,
+              entity: v.entity_name,
+              type: v.entity_type,
+              content: v.content,
+              source: v.source,
+              kind: v.kind,
+              remembered_at: v.created_at,
+              similarity: Math.round(score * 1000) / 1000,
+            });
+          }
+        }
+      }
+    }
+
+    // Re-sort all memories by similarity descending
+    memories.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
   }
 
   const limited = memories.slice(0, input.limit);
@@ -221,6 +281,7 @@ function formatObservation(obs: ObservationWithEntity): MemoryResult {
     type: obs.entity_type,
     content: obs.content,
     source: obs.source,
+    kind: obs.kind,
     remembered_at: obs.created_at,
   };
 }

@@ -48,6 +48,11 @@ export function createMcpServer(): McpServer {
         .max(1)
         .optional()
         .describe('Importance score (0.0-1.0, default 1.0). Higher = boosted in recall ranking. Use for facts that should always surface.'),
+      kind: z
+        .string()
+        .max(50)
+        .optional()
+        .describe('Classification: fact, decision, question, preference (or custom). Filterable in recall.'),
     },
     async (args) => {
       try {
@@ -57,6 +62,7 @@ export function createMcpServer(): McpServer {
           type: args.type,
           source: args.source,
           importance: args.importance,
+          kind: args.kind,
         };
 
         const result = await remember(sanitizedArgs);
@@ -106,6 +112,15 @@ export function createMcpServer(): McpServer {
         .string()
         .optional()
         .describe('Only return memories after this ISO date'),
+      kind: z
+        .string()
+        .max(50)
+        .optional()
+        .describe('Filter by observation kind (e.g., "fact", "decision", "question")'),
+      spread: z
+        .boolean()
+        .default(false)
+        .describe('Follow relationships 1 hop from matched entities and include related observations (dampened). Discovers contextually connected memories.'),
       format: z
         .enum(['full', 'compact', 'wire', 'index'])
         .default('full')
@@ -118,6 +133,8 @@ export function createMcpServer(): McpServer {
           limit: args.limit,
           type: args.type,
           since: args.since,
+          kind: args.kind,
+          spread: args.spread,
           format: args.format,
         });
         return {
@@ -386,9 +403,9 @@ export function createMcpServer(): McpServer {
         .default(0.8)
         .describe('Cosine similarity threshold for clustering (0.5-1.0, default 0.8). Lower = more aggressive grouping.'),
       mode: z
-        .enum(['observations', 'entities'])
+        .enum(['observations', 'entities', 'contradictions'])
         .default('observations')
-        .describe('"observations" (default) finds similar observations to merge. "entities" finds entity names that likely refer to the same thing.'),
+        .describe('"observations" (default) finds similar observations to merge. "entities" finds entity names that likely refer to the same thing. "contradictions" finds same-topic observations with conflicting content.'),
     },
     async (args) => {
       try {

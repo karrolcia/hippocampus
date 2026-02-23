@@ -6,7 +6,7 @@ import { cosineSimilarity } from '../../embeddings/similarity.js';
 export interface ConsolidateInput {
   entity?: string;
   threshold?: number;
-  mode?: 'observations' | 'entities';
+  mode?: 'observations' | 'entities' | 'contradictions';
 }
 
 interface ClusterObservation {
@@ -49,6 +49,19 @@ export interface EntityResolutionResult {
   message: string;
 }
 
+interface ContradictionPair {
+  observations: [ClusterObservation, ClusterObservation];
+  embedding_similarity: number;
+  lexical_overlap: number;
+}
+
+export interface ContradictionResult {
+  success: boolean;
+  total_observations: number;
+  pairs: ContradictionPair[];
+  message: string;
+}
+
 // Union-Find with path compression and union by rank
 class UnionFind {
   private parent: number[];
@@ -81,9 +94,12 @@ class UnionFind {
   }
 }
 
-export async function consolidate(input: ConsolidateInput): Promise<ConsolidateResult | EntityResolutionResult> {
+export async function consolidate(input: ConsolidateInput): Promise<ConsolidateResult | EntityResolutionResult | ContradictionResult> {
   if (input.mode === 'entities') {
     return resolveEntities(input.threshold ?? 0.7);
+  }
+  if (input.mode === 'contradictions') {
+    return detectContradictions(input);
   }
   return consolidateObservations(input);
 }
@@ -281,6 +297,85 @@ async function resolveEntities(threshold: number): Promise<EntityResolutionResul
       ? `Scanned ${entities.length} entity names — no similar names found above threshold ${threshold}.`
       : `Found ${clusters.length} cluster(s) of potentially duplicate entities across ${entities.length} total. Review each cluster and decide which to merge.`,
   };
+}
+
+const DEFAULT_CONTRADICTION_THRESHOLD = 0.6;
+const MAX_LEXICAL_OVERLAP = 0.3;
+
+function detectContradictions(input: ConsolidateInput): ContradictionResult {
+  const threshold = input.threshold ?? DEFAULT_CONTRADICTION_THRESHOLD;
+
+  // Resolve entity name to ID if provided
+  let entityId: string | undefined;
+  if (input.entity) {
+    const entity = findEntityByName(input.entity);
+    if (!entity) {
+      return {
+        success: false,
+        total_observations: 0,
+        pairs: [],
+        message: `Entity "${input.entity}" not found.`,
+      };
+    }
+    entityId = entity.id;
+  }
+
+  const vectors = getEmbeddingsByEntity(entityId);
+
+  if (vectors.length < 2) {
+    return {
+      success: true,
+      total_observations: vectors.length,
+      pairs: [],
+      message: vectors.length === 0
+        ? 'No observations found.'
+        : 'Only one observation — nothing to compare.',
+    };
+  }
+
+  const pairs: ContradictionPair[] = [];
+
+  for (let i = 0; i < vectors.length; i++) {
+    for (let j = i + 1; j < vectors.length; j++) {
+      const embSim = cosineSimilarity(vectors[i].vector, vectors[j].vector);
+      if (embSim < threshold) continue;
+
+      const lexOverlap = jaccardSimilarity(vectors[i].content, vectors[j].content);
+      if (lexOverlap < MAX_LEXICAL_OVERLAP) {
+        pairs.push({
+          observations: [toClusterObservation(vectors[i]), toClusterObservation(vectors[j])],
+          embedding_similarity: Math.round(embSim * 1000) / 1000,
+          lexical_overlap: Math.round(lexOverlap * 1000) / 1000,
+        });
+      }
+    }
+  }
+
+  // Sort by embedding similarity descending
+  pairs.sort((a, b) => b.embedding_similarity - a.embedding_similarity);
+
+  return {
+    success: true,
+    total_observations: vectors.length,
+    pairs,
+    message: pairs.length === 0
+      ? `Scanned ${vectors.length} observations — no potential contradictions found.`
+      : `Found ${pairs.length} potential contradiction(s) across ${vectors.length} observations. Review each pair — high semantic similarity with low lexical overlap suggests conflicting claims.`,
+  };
+}
+
+function jaccardSimilarity(a: string, b: string): number {
+  const setA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 0));
+  const setB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 0));
+  if (setA.size === 0 && setB.size === 0) return 1;
+
+  let intersection = 0;
+  for (const word of setA) {
+    if (setB.has(word)) intersection++;
+  }
+
+  const union = setA.size + setB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
 }
 
 function toClusterObservation(v: StoredVector): ClusterObservation {

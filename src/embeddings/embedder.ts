@@ -58,7 +58,10 @@ export interface StoredVector {
   entity_type: string | null;
   content: string;
   source: string | null;
+  kind: string | null;
   created_at: string;
+  recall_count: number;
+  importance: number;
   vector: Float32Array;
 }
 
@@ -67,7 +70,8 @@ export function getEmbeddingsByEntity(entityId?: string): StoredVector[] {
 
   let sql = `
     SELECT emb.observation_id, emb.entity_id, emb.vector,
-      o.content, o.source, o.created_at,
+      o.content, o.source, o.kind, o.created_at,
+      o.recall_count, o.importance,
       e.name as entity_name, e.type as entity_type
     FROM embeddings emb
     JOIN observations o ON emb.observation_id = o.id
@@ -86,7 +90,10 @@ export function getEmbeddingsByEntity(entityId?: string): StoredVector[] {
     vector: Buffer;
     content: string;
     source: string | null;
+    kind: string | null;
     created_at: string;
+    recall_count: number;
+    importance: number;
     entity_name: string;
     entity_type: string | null;
   }>;
@@ -98,7 +105,10 @@ export function getEmbeddingsByEntity(entityId?: string): StoredVector[] {
     entity_type: row.entity_type,
     content: row.content,
     source: row.source,
+    kind: row.kind,
     created_at: row.created_at,
+    recall_count: row.recall_count ?? 0,
+    importance: row.importance ?? 1.0,
     vector: new Float32Array(
       row.vector.buffer,
       row.vector.byteOffset,
@@ -114,16 +124,31 @@ export interface SemanticSearchResult {
   entity_type: string | null;
   content: string;
   source: string | null;
+  kind: string | null;
   created_at: string;
   similarity: number;
 }
 
+export interface SemanticSearchOptions {
+  limit?: number;
+  type?: string;
+  since?: string;
+  kind?: string;
+}
+
 export async function semanticSearch(
   query: string,
-  options?: { limit?: number; type?: string; since?: string }
+  options?: SemanticSearchOptions
 ): Promise<SemanticSearchResult[]> {
-  const limit = options?.limit ?? 10;
   const queryVector = await generateEmbedding(query);
+  return semanticSearchWithVector(queryVector, options);
+}
+
+export function semanticSearchWithVector(
+  queryVector: Float32Array,
+  options?: SemanticSearchOptions
+): SemanticSearchResult[] {
+  const limit = options?.limit ?? 10;
 
   const db = getDatabase();
 
@@ -131,7 +156,7 @@ export async function semanticSearch(
   // Pull recall_count + importance for decay-weighted scoring
   let sql = `
     SELECT emb.observation_id, emb.entity_id, emb.vector,
-      o.content, o.source, o.created_at,
+      o.content, o.source, o.kind, o.created_at,
       o.recall_count, o.importance,
       e.name as entity_name, e.type as entity_type
     FROM embeddings emb
@@ -150,6 +175,10 @@ export async function semanticSearch(
     conditions.push('o.created_at >= ?');
     params.push(options.since);
   }
+  if (options?.kind) {
+    conditions.push('o.kind = ?');
+    params.push(options.kind);
+  }
 
   if (conditions.length > 0) {
     sql += ' WHERE ' + conditions.join(' AND ');
@@ -161,6 +190,7 @@ export async function semanticSearch(
     vector: Buffer;
     content: string;
     source: string | null;
+    kind: string | null;
     created_at: string;
     recall_count: number;
     importance: number;
@@ -189,6 +219,7 @@ export async function semanticSearch(
       entity_type: row.entity_type,
       content: row.content,
       source: row.source,
+      kind: row.kind,
       created_at: row.created_at,
       similarity, // raw cosine, for display
       finalScore, // used for ranking only

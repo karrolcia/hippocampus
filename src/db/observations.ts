@@ -7,6 +7,7 @@ export interface Observation {
   entity_id: string;
   content: string;
   source: string | null;
+  kind: string | null;
   created_at: string;
   last_recalled_at: string | null;
   recall_count: number;
@@ -22,15 +23,16 @@ export function createObservation(
   entityId: string,
   content: string,
   source?: string,
-  importance: number = 1.0
+  importance: number = 1.0,
+  kind?: string
 ): Observation {
   const db = getDatabase();
   const id = randomUUID();
 
   db.prepare(`
-    INSERT INTO observations (id, entity_id, content, source, importance)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(id, entityId, content, source ?? null, importance);
+    INSERT INTO observations (id, entity_id, content, source, importance, kind)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, entityId, content, source ?? null, importance, kind ?? null);
 
   updateEntityTimestamp(entityId);
 
@@ -51,6 +53,7 @@ export interface SearchOptions {
   limit?: number;
   type?: string;
   since?: string;
+  kind?: string;
 }
 
 export function searchObservations(options: SearchOptions): ObservationWithEntity[] {
@@ -78,6 +81,11 @@ export function searchObservations(options: SearchOptions): ObservationWithEntit
   if (options.since) {
     sql += ' AND o.created_at >= ?';
     params.push(options.since);
+  }
+
+  if (options.kind) {
+    sql += ' AND o.kind = ?';
+    params.push(options.kind);
   }
 
   sql += ' ORDER BY o.created_at DESC LIMIT ?';

@@ -233,6 +233,7 @@ function formatJson(entitiesData: EntityData[], allRelationships: RelationshipWi
         id: obs.id,
         content: obs.content,
         source: obs.source,
+        kind: obs.kind,
         created_at: obs.created_at,
       })),
     })),
