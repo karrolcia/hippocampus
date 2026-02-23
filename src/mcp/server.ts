@@ -107,9 +107,9 @@ export function createMcpServer(): McpServer {
         .optional()
         .describe('Only return memories after this ISO date'),
       format: z
-        .enum(['full', 'compact'])
+        .enum(['full', 'compact', 'wire', 'index'])
         .default('full')
-        .describe('"full" (JSON with all fields) or "compact" (grouped markdown, minimal tokens). Use compact unless you need observation IDs.'),
+        .describe('"full" (JSON with all fields), "compact" (grouped markdown), "wire" (minimal shorthand, ~2x fewer tokens than compact), "index" (entity summary only — use context tool to expand). Use compact or wire unless you need observation IDs. When using index format, call the context tool to get full details on entities you need.'),
     },
     async (args) => {
       try {
@@ -421,11 +421,11 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'export',
-    'Export memories as a CLAUDE.md context file, readable markdown, or JSON. Use claude-md for context files, markdown for human reading, json for backup/portability.',
+    'Export memories as a CLAUDE.md context file, readable markdown, JSON, wire format, or Obsidian vault. Use claude-md for context files, markdown for human reading, json for backup/portability, wire for minimal tokens, obsidian for vault export with wikilinks.',
     {
       format: z
-        .enum(['claude-md', 'markdown', 'json'])
-        .describe('Output format: claude-md (compact context), markdown (full with metadata), json (structured backup)'),
+        .enum(['claude-md', 'markdown', 'json', 'wire', 'obsidian'])
+        .describe('Output format: claude-md (compact context), markdown (full with metadata), json (structured backup), wire (minimal shorthand, lowest tokens), obsidian (vault-ready files with YAML frontmatter and [[wikilinks]])'),
       entity: z
         .string()
         .max(200)

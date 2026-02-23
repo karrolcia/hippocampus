@@ -3,7 +3,7 @@ import { getObservationsByEntity, type Observation } from '../../db/observations
 import { getRelationshipsByEntity, type RelationshipWithNames } from '../../db/relationships.js';
 
 export interface ExportInput {
-  format: 'claude-md' | 'markdown' | 'json';
+  format: 'claude-md' | 'markdown' | 'json' | 'wire' | 'obsidian';
   entity?: string;
   type?: string;
 }
@@ -87,6 +87,12 @@ export function exportMemories(input: ExportInput): ExportResult {
       break;
     case 'json':
       data = formatJson(entitiesData, allRelationships);
+      break;
+    case 'wire':
+      data = formatExportWire(entitiesData, allRelationships);
+      break;
+    case 'obsidian':
+      data = formatObsidian(entitiesData, allRelationships);
       break;
   }
 
@@ -239,6 +245,90 @@ function formatJson(entitiesData: EntityData[], allRelationships: RelationshipWi
   };
 
   return JSON.stringify(exportData, null, 2);
+}
+
+/** Minimal wire format — lowest tokens. */
+function formatExportWire(entitiesData: EntityData[], allRelationships: RelationshipWithNames[]): string {
+  const sections: string[] = [];
+
+  for (const { entity, observations } of entitiesData) {
+    const typeStr = entity.type ? `|${entity.type}` : '';
+    const lines = [`#E ${entity.name}${typeStr}`];
+    for (const obs of observations) {
+      lines.push(`- ${obs.content}`);
+    }
+    sections.push(lines.join('\n'));
+  }
+
+  if (allRelationships.length > 0) {
+    const relLines: string[] = [];
+    for (const rel of allRelationships) {
+      relLines.push(`#R ${rel.from_name}\u2192${rel.relation_type}\u2192${rel.to_name}`);
+    }
+    sections.push(relLines.join('\n'));
+  }
+
+  return sections.join('\n\n');
+}
+
+/** Obsidian vault export — returns JSON with files array. */
+function formatObsidian(entitiesData: EntityData[], allRelationships: RelationshipWithNames[]): string {
+  const files: Array<{ path: string; content: string }> = [];
+
+  // Build relationship lookup: entity name → list of relationship descriptions
+  const relsByEntity = new Map<string, string[]>();
+  for (const rel of allRelationships) {
+    const fromList = relsByEntity.get(rel.from_name) ?? [];
+    fromList.push(`- ${rel.relation_type} [[${slugify(rel.to_name)}|${rel.to_name}]]`);
+    relsByEntity.set(rel.from_name, fromList);
+
+    const toList = relsByEntity.get(rel.to_name) ?? [];
+    toList.push(`- ${rel.relation_type} (from [[${slugify(rel.from_name)}|${rel.from_name}]])`);
+    relsByEntity.set(rel.to_name, toList);
+  }
+
+  for (const { entity, observations } of entitiesData) {
+    const created = entity.created_at?.split('T')[0] ?? '';
+    const updated = entity.updated_at?.split('T')[0] ?? '';
+
+    const lines: string[] = [
+      '---',
+      ...(entity.type ? [`type: ${entity.type}`] : []),
+      ...(created ? [`created: ${created}`] : []),
+      ...(updated ? [`updated: ${updated}`] : []),
+      `observations: ${observations.length}`,
+      '---',
+      '',
+      `# ${entity.name}`,
+      '',
+    ];
+
+    for (const obs of observations) {
+      lines.push(`- ${obs.content}`);
+    }
+
+    const rels = relsByEntity.get(entity.name);
+    if (rels && rels.length > 0) {
+      lines.push('', '## Relationships', '');
+      for (const r of rels) {
+        lines.push(r);
+      }
+    }
+
+    files.push({
+      path: `${slugify(entity.name)}.md`,
+      content: lines.join('\n') + '\n',
+    });
+  }
+
+  return JSON.stringify({ files }, null, 2);
+}
+
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 function capitalize(s: string): string {

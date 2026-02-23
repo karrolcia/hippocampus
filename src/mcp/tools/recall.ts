@@ -10,7 +10,7 @@ export const recallSchema = z.object({
   limit: z.coerce.number().min(1).max(50).default(10),
   type: z.string().max(50).optional(),
   since: z.string().datetime().optional(),
-  format: z.enum(['full', 'compact']).default('full'),
+  format: z.enum(['full', 'compact', 'wire', 'index']).default('full'),
 });
 
 export type RecallInput = z.infer<typeof recallSchema>;
@@ -39,7 +39,14 @@ export interface RecallCompactResult {
   text: string;
 }
 
-export async function recall(input: RecallInput): Promise<RecallResult | RecallCompactResult> {
+export interface RecallIndexResult {
+  success: boolean;
+  count: number;
+  entity_count: number;
+  text: string;
+}
+
+export async function recall(input: RecallInput): Promise<RecallResult | RecallCompactResult | RecallIndexResult> {
   // Run semantic and keyword search in parallel
   const [semanticResults, keywordResults] = await Promise.all([
     semanticSearch(input.query, {
@@ -101,6 +108,18 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     };
   }
 
+  if (input.format === 'wire') {
+    return {
+      success: true,
+      count: limited.length,
+      text: formatWire(limited),
+    };
+  }
+
+  if (input.format === 'index') {
+    return formatIndex(limited);
+  }
+
   return {
     success: true,
     count: limited.length,
@@ -134,6 +153,65 @@ function formatCompact(memories: MemoryResult[]): string {
   }
 
   return sections.join('\n\n');
+}
+
+function formatWire(memories: MemoryResult[]): string {
+  if (memories.length === 0) return '';
+
+  const groups = new Map<string, { type: string | null; items: MemoryResult[] }>();
+  for (const m of memories) {
+    const existing = groups.get(m.entity);
+    if (existing) {
+      existing.items.push(m);
+    } else {
+      groups.set(m.entity, { type: m.type, items: [m] });
+    }
+  }
+
+  const sections: string[] = [];
+  for (const [entity, { type, items }] of groups) {
+    const typeStr = type ? `|${type}` : '';
+    const lines = [`#E ${entity}${typeStr}`];
+    for (const item of items) {
+      lines.push(`- ${item.content}`);
+    }
+    sections.push(lines.join('\n'));
+  }
+
+  return sections.join('\n\n');
+}
+
+function formatIndex(memories: MemoryResult[]): RecallIndexResult {
+  if (memories.length === 0) {
+    return { success: true, count: 0, entity_count: 0, text: '#I 0 results, 0 entities' };
+  }
+
+  const entityMap = new Map<string, { type: string | null; obsCount: number; bestSimilarity: number }>();
+  for (const m of memories) {
+    const existing = entityMap.get(m.entity);
+    const sim = m.similarity ?? 0;
+    if (existing) {
+      existing.obsCount++;
+      if (sim > existing.bestSimilarity) existing.bestSimilarity = sim;
+    } else {
+      entityMap.set(m.entity, { type: m.type, obsCount: 1, bestSimilarity: sim });
+    }
+  }
+
+  const sorted = [...entityMap.entries()].sort((a, b) => b[1].bestSimilarity - a[1].bestSimilarity);
+
+  const lines = [`#I ${memories.length} results, ${sorted.length} entities`];
+  for (const [name, { type, obsCount, bestSimilarity }] of sorted) {
+    const typeStr = type ?? '';
+    lines.push(`${name}|${typeStr}|${obsCount} obs|${bestSimilarity.toFixed(2)}`);
+  }
+
+  return {
+    success: true,
+    count: memories.length,
+    entity_count: sorted.length,
+    text: lines.join('\n'),
+  };
 }
 
 function formatObservation(obs: ObservationWithEntity): MemoryResult {
