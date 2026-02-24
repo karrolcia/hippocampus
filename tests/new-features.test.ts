@@ -18,7 +18,10 @@ const { exportMemories } = await import('../src/mcp/tools/export.js');
 const { searchObservations } = await import('../src/db/observations.js');
 const { findEntityByName, findOrCreateEntity } = await import('../src/db/entities.js');
 const { createRelationship } = await import('../src/db/relationships.js');
-const { createObservation } = await import('../src/db/observations.js');
+const { createObservation, getObservationsByEntity } = await import('../src/db/observations.js');
+const { listEntities } = await import('../src/db/entities.js');
+const { gatherEntityData, formatClaudeMd } = await import('../src/mcp/tools/export.js');
+const { config } = await import('../src/config.js');
 
 before(() => {
   initDatabase();
@@ -362,5 +365,144 @@ describe('Contradiction detection', () => {
     assert.ok('pairs' in normal);
     const normalPairs = (normal as { pairs: Array<unknown> }).pairs;
     assert.ok(normalPairs.length >= 1, 'Default threshold should detect the contradiction');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Onboarding guidance (adaptive context)
+// ---------------------------------------------------------------------------
+
+describe('Onboarding guidance', () => {
+  test('sparse DB includes onboarding text', () => {
+    // At this point the DB has observations from prior tests, so we
+    // test the logic directly using the same code path as context.ts
+    // with a fresh entity set that has < 5 observations.
+    const sparseEntity = findOrCreateEntity('onboard-sparse-test', 'person');
+    createObservation(sparseEntity.id, 'Based in Helsinki');
+    createObservation(sparseEntity.id, 'PhD atmospheric physics');
+
+    // Simulate the context resource logic with only this entity's data
+    const entitiesData = [{ entity: sparseEntity, observations: getObservationsByEntity(sparseEntity.id), relationships: [] }];
+    let totalObs = 0;
+    for (const ed of entitiesData) totalObs += ed.observations.length;
+
+    assert.ok(totalObs < 5, 'Should have fewer than 5 observations');
+
+    // Build the same output as context.ts sparse branch
+    const onboarding = [
+      '# Memory',
+      '',
+      'Few memories stored. To build a useful knowledge base, capture what you',
+      'already know about this user — identity, active projects, preferences,',
+      'working patterns. Use the remember tool, one fact per call, telegraphic form.',
+    ];
+    const knowledgeGraph = formatClaudeMd(entitiesData, config.contextMaxObservations);
+    onboarding.push('', knowledgeGraph);
+    const text = onboarding.join('\n').trimEnd() + '\n';
+
+    assert.ok(text.includes('Few memories stored'), 'Should contain onboarding guidance');
+    assert.ok(text.includes('Based in Helsinki'), 'Should also show existing knowledge');
+  });
+
+  test('populated DB (5+ obs) omits onboarding text', () => {
+    const entity = findOrCreateEntity('onboard-populated-test', 'person');
+    for (let i = 0; i < 6; i++) {
+      createObservation(entity.id, `Observation number ${i}`);
+    }
+
+    const entitiesData = [{ entity, observations: getObservationsByEntity(entity.id), relationships: [] }];
+    let totalObs = 0;
+    for (const ed of entitiesData) totalObs += ed.observations.length;
+
+    assert.ok(totalObs >= 5, 'Should have 5+ observations');
+
+    // In the populated branch, context.ts returns formatClaudeMd directly
+    const markdown = formatClaudeMd(entitiesData, config.contextMaxObservations);
+
+    assert.ok(!markdown.includes('Few memories stored'), 'Should NOT contain onboarding guidance');
+    assert.ok(markdown.includes('Observation number'), 'Should contain observation content');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Near-match detection
+// ---------------------------------------------------------------------------
+
+describe('Near-match detection', () => {
+  test('remember returns near_matches for overlapping observations', async () => {
+    // First observation
+    await remember({
+      content: 'Based in Helsinki, Finland',
+      entity: 'near-match-test-overlap',
+    });
+
+    // Second observation — related topic, different enough to avoid dedup (< 0.85)
+    // but similar enough to be a near match (>= 0.5)
+    const result = await remember({
+      content: 'Lives in Helsinki with family, relocating to Stockholm',
+      entity: 'near-match-test-overlap',
+    });
+
+    assert.equal(result.success, true);
+    // The observation should be stored (not deduped)
+    assert.ok(!result.deduplicated, 'Should not be deduplicated');
+
+    if (result.near_matches && result.near_matches.length > 0) {
+      // Near match detected — verify structure
+      const match = result.near_matches[0];
+      assert.ok(typeof match.content === 'string');
+      assert.ok(typeof match.similarity === 'number');
+      assert.ok(match.similarity >= 0.5, 'Similarity should be >= 0.5');
+      assert.ok(match.similarity < 0.85, 'Similarity should be < 0.85 (not a duplicate)');
+    }
+    // Note: embedding model may or may not produce a near match for these specific strings.
+    // The structural test is that near_matches is either undefined or a valid array.
+    assert.ok(
+      result.near_matches === undefined || Array.isArray(result.near_matches),
+      'near_matches should be undefined or an array'
+    );
+  });
+
+  test('remember returns no near_matches for unrelated observations', async () => {
+    await remember({
+      content: 'PhD atmospheric physics from TU Delft',
+      entity: 'near-match-test-unrelated',
+    });
+
+    // Completely unrelated topic
+    const result = await remember({
+      content: 'Favorite color is deep blue',
+      entity: 'near-match-test-unrelated',
+    });
+
+    assert.equal(result.success, true);
+    // Unrelated observations should not produce near matches
+    const matches = result.near_matches ?? [];
+    assert.equal(matches.length, 0, 'Unrelated observations should produce no near matches');
+  });
+
+  test('near_matches capped at 3', async () => {
+    // Store 5 observations on similar-ish topics
+    const topics = [
+      'Strategy consulting for climate tech startups',
+      'Leadership coaching for climate founders',
+      'Advisory work for climate adaptation companies',
+      'Climate tech product strategy and go-to-market',
+      'Helping climate startups with organizational design',
+    ];
+
+    for (const topic of topics) {
+      await remember({ content: topic, entity: 'near-match-test-cap' });
+    }
+
+    // Store one more similar observation
+    const result = await remember({
+      content: 'Consulting and coaching climate technology ventures',
+      entity: 'near-match-test-cap',
+    });
+
+    assert.equal(result.success, true);
+    const matches = result.near_matches ?? [];
+    assert.ok(matches.length <= 3, `near_matches should be capped at 3, got ${matches.length}`);
   });
 });

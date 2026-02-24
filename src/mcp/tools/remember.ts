@@ -6,6 +6,8 @@ import { generateEmbedding, storeEmbedding, getEmbeddingsByEntity, deleteEmbeddi
 import { cosineSimilarity } from '../../embeddings/similarity.js';
 
 const DEDUP_THRESHOLD = 0.85;
+const NEAR_MATCH_THRESHOLD = 0.5;
+const MAX_NEAR_MATCHES = 3;
 
 export const rememberSchema = z.object({
   content: z
@@ -35,6 +37,7 @@ export interface RememberResult {
   message: string;
   deduplicated?: boolean;
   replaced_observation?: string;
+  near_matches?: Array<{ content: string; similarity: number }>;
 }
 
 export async function remember(input: RememberInput): Promise<RememberResult> {
@@ -47,13 +50,20 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
   // Dedup check: compare against existing observations for this entity
   const existing = getEmbeddingsByEntity(entity.id);
   let bestMatch: { similarity: number; index: number } | null = null;
+  const nearMatches: Array<{ content: string; similarity: number }> = [];
 
   for (let i = 0; i < existing.length; i++) {
     const sim = cosineSimilarity(vector, existing[i].vector);
     if (sim >= DEDUP_THRESHOLD && (!bestMatch || sim > bestMatch.similarity)) {
       bestMatch = { similarity: sim, index: i };
+    } else if (sim >= NEAR_MATCH_THRESHOLD && sim < DEDUP_THRESHOLD) {
+      nearMatches.push({ content: existing[i].content, similarity: sim });
     }
   }
+
+  // Keep top N near matches by similarity
+  nearMatches.sort((a, b) => b.similarity - a.similarity);
+  if (nearMatches.length > MAX_NEAR_MATCHES) nearMatches.length = MAX_NEAR_MATCHES;
 
   if (bestMatch) {
     const match = existing[bestMatch.index];
@@ -98,7 +108,7 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
 
   const relationshipsCreated = detectAndCreateRelationships(entity, input.content);
 
-  return {
+  const result: RememberResult = {
     success: true,
     entityId: entity.id,
     entityName: entity.name,
@@ -106,6 +116,13 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
     relationships_created: relationshipsCreated,
     message: `Remembered: "${input.content.slice(0, 50)}${input.content.length > 50 ? '...' : ''}" for entity "${entity.name}"`,
   };
+
+  if (nearMatches.length > 0) {
+    result.near_matches = nearMatches;
+    result.message += `. These existing observations overlap — consider consolidating: ${nearMatches.map(m => `"${m.content.slice(0, 40)}..." (${m.similarity.toFixed(3)})`).join(', ')}`;
+  }
+
+  return result;
 }
 
 const SKIP_ENTITIES = new Set(['general']);

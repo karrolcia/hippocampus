@@ -16,17 +16,37 @@ export function registerContextResources(server: McpServer): void {
     },
     async () => {
       const entities = listEntities({ limit: 10000 });
-      if (entities.length === 0) {
+      const entitiesData = gatherEntityData(entities);
+
+      let totalObservations = 0;
+      for (const ed of entitiesData) totalObservations += ed.observations.length;
+
+      const SPARSE_THRESHOLD = 5;
+
+      if (totalObservations < SPARSE_THRESHOLD) {
+        const onboarding = [
+          '# Memory',
+          '',
+          'Few memories stored. To build a useful knowledge base, capture what you',
+          'already know about this user — identity, active projects, preferences,',
+          'working patterns. Use the remember tool, one fact per call, telegraphic form.',
+        ];
+
+        // Append existing knowledge if any observations exist
+        if (totalObservations > 0) {
+          const knowledgeGraph = formatClaudeMd(entitiesData, config.contextMaxObservations);
+          onboarding.push('', knowledgeGraph);
+        }
+
         return {
           contents: [{
             uri: 'hippocampus://context',
-            text: '# Memory Export\n\nNo memories stored yet.\n',
+            text: onboarding.join('\n').trimEnd() + '\n',
             mimeType: 'text/markdown',
           }],
         };
       }
 
-      const entitiesData = gatherEntityData(entities);
       const markdown = formatClaudeMd(entitiesData, config.contextMaxObservations);
 
       return {
