@@ -85,7 +85,7 @@ curl http://localhost:3000/health
 Expected response:
 
 ```json
-{"status":"ok","version":"0.1.0"}
+{"status":"ok","version":"0.2.0"}
 ```
 
 **5. Connect Claude Code**
@@ -211,7 +211,7 @@ curl https://hippo.yourdomain.com/health
 Expected response:
 
 ```json
-{"status":"ok","version":"0.1.0"}
+{"status":"ok","version":"0.2.0"}
 ```
 
 If you get a certificate error, DNS might not have propagated yet. Wait a few minutes and retry.
@@ -396,7 +396,7 @@ You're responsible for uptime and physical security. See [SECURITY.md](SECURITY.
 | `forget` | Permanently delete a memory or entity (secure deletion) |
 | `merge` | Merge multiple observations into one (atomic consolidation) |
 | `merge_entities` | Merge multiple entities into one — moves all data, deletes sources |
-| `consolidate` | Find clusters of similar/duplicate memories, detect near-duplicate entities, or surface potential contradictions |
+| `consolidate` | Find clusters of similar/duplicate memories, detect near-duplicate entities, surface contradictions, or run sleep mode for batch lifecycle analysis (compress/prune/refresh) |
 | `export` | Export as CLAUDE.md context file, readable markdown, JSON, wire format, or Obsidian vault |
 
 The AI calls these tools naturally. You don't manage memory manually — you just talk to your AI and it remembers.
@@ -409,9 +409,27 @@ When you `recall` with `spread: true`, Hippocampus doesn't just return direct ma
 
 `consolidate` with `mode: "contradictions"` finds observation pairs that talk about the same thing (high embedding similarity) but say different things (low word overlap). No LLM required — pure embedding math plus Jaccard comparison. Review the flagged pairs and decide what to keep.
 
+### Novelty scoring
+
+Every `remember` call returns a `novelty` score (0–1) computed via SVD subspace projection. Pairwise cosine checks miss aggregate redundancy — five observations with moderate individual overlap can collectively explain a new observation entirely. Subspace projection compares against all existing observations simultaneously. When novelty drops below 0.1, the response warns that the information may already be captured.
+
 ### Near-match detection
 
 When `remember` stores a new observation, it reports existing observations that overlap (cosine similarity 0.5–0.85) — the zone between "clearly different" and "near-duplicate." The AI sees these in the response and can consolidate immediately instead of waiting for a batch `consolidate` pass. No extra computation: the dedup scan already compares against all entity embeddings.
+
+### Sleep mode
+
+`consolidate` with `mode: "sleep"` runs batch lifecycle analysis — the overnight defrag for your knowledge graph. Uses SVD leverage scores combined with temporal signals to classify old observations into three categories:
+
+- **Compress**: redundant + old + recalled. Information captured elsewhere, safe to merge down.
+- **Prune**: never recalled + old. The synapse never fired — delete candidates.
+- **Refresh**: actively used + unique + old. The AI keeps serving these, but newer information exists on the entity. Reconsolidation candidates.
+
+Returns `information_rank` and `redundancy_ratio` per entity for structural diagnosis. The AI acts on results using existing tools — `merge` for compress, `forget` for prune, `update` for refresh.
+
+### Reconsolidation hints
+
+When `recall` returns observations older than 30 days on an entity that has received newer information since, they're flagged `stale: true`. Lightweight date comparison on every retrieval — no embedding computation. The AI sees the flag and can decide whether to update or leave the observation as-is.
 
 ### Onboarding
 
@@ -485,7 +503,8 @@ src/
 │   ├── observations.ts   # Observation CRUD + keyword search
 │   └── relationships.ts  # Relationship CRUD + BFS graph traversal
 ├── embeddings/
-│   └── embedder.ts       # Local embeddings (all-MiniLM-L6-v2) + semantic search
+│   ├── embedder.ts       # Local embeddings (all-MiniLM-L6-v2) + semantic search
+│   └── subspace.ts       # SVD novelty scoring + redundancy analysis
 └── auth/
     └── oauth.ts          # Self-contained OAuth 2.1 server
 ```
