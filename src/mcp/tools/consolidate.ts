@@ -2,11 +2,13 @@ import { findEntityByName, listEntities } from '../../db/entities.js';
 import { getObservationsByEntity } from '../../db/observations.js';
 import { getEmbeddingsByEntity, generateEmbedding, type StoredVector } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
+import { computeRedundancyScores } from '../../embeddings/subspace.js';
 
 export interface ConsolidateInput {
   entity?: string;
   threshold?: number;
-  mode?: 'observations' | 'entities' | 'contradictions';
+  mode?: 'observations' | 'entities' | 'contradictions' | 'sleep';
+  age_days?: number;
 }
 
 interface ClusterObservation {
@@ -94,12 +96,15 @@ class UnionFind {
   }
 }
 
-export async function consolidate(input: ConsolidateInput): Promise<ConsolidateResult | EntityResolutionResult | ContradictionResult> {
+export async function consolidate(input: ConsolidateInput): Promise<ConsolidateResult | EntityResolutionResult | ContradictionResult | SleepResult> {
   if (input.mode === 'entities') {
     return resolveEntities(input.threshold ?? 0.7);
   }
   if (input.mode === 'contradictions') {
     return detectContradictions(input);
+  }
+  if (input.mode === 'sleep') {
+    return sleepMode(input);
   }
   return consolidateObservations(input);
 }
@@ -386,5 +391,143 @@ function toClusterObservation(v: StoredVector): ClusterObservation {
     content: v.content,
     source: v.source,
     remembered_at: v.created_at,
+  };
+}
+
+// --- Sleep mode: batch compression, pruning, reconsolidation ---
+
+export interface SleepObservation {
+  observation_id: string;
+  entity: string;
+  type: string | null;
+  content: string;
+  remembered_at: string;
+  age_days: number;
+  recall_count: number;
+  redundancy: number;
+}
+
+export interface SleepResult {
+  success: boolean;
+  entity?: string;
+  total_observations: number;
+  information_rank: number;
+  redundancy_ratio: number;
+  compress: SleepObservation[];
+  prune: SleepObservation[];
+  refresh: SleepObservation[];
+  message: string;
+}
+
+function sleepMode(input: ConsolidateInput): SleepResult {
+  const ageDays = input.age_days ?? 30;
+  const now = Date.now();
+
+  // Resolve entity scope
+  let entityIds: Array<{ id: string; name: string; type: string | null }> = [];
+  if (input.entity) {
+    const entity = findEntityByName(input.entity);
+    if (!entity) {
+      return {
+        success: false,
+        entity: input.entity,
+        total_observations: 0,
+        information_rank: 0,
+        redundancy_ratio: 0,
+        compress: [],
+        prune: [],
+        refresh: [],
+        message: `Entity "${input.entity}" not found.`,
+      };
+    }
+    entityIds = [{ id: entity.id, name: entity.name, type: entity.type }];
+  } else {
+    const entities = listEntities({ limit: 10000 });
+    entityIds = entities.map(e => ({ id: e.id, name: e.name, type: e.type }));
+  }
+
+  // Collect all vectors and metadata across scoped entities
+  const allVectors: StoredVector[] = [];
+  for (const e of entityIds) {
+    const vectors = getEmbeddingsByEntity(e.id);
+    allVectors.push(...vectors);
+  }
+
+  if (allVectors.length === 0) {
+    return {
+      success: true,
+      entity: input.entity,
+      total_observations: 0,
+      information_rank: 0,
+      redundancy_ratio: 0,
+      compress: [],
+      prune: [],
+      refresh: [],
+      message: 'No observations found.',
+    };
+  }
+
+  // Compute SVD redundancy scores
+  const { scores, rank, redundancyRatio } = computeRedundancyScores(
+    allVectors.map(v => v.vector)
+  );
+
+  // Classify each observation
+  const compress: SleepObservation[] = [];
+  const prune: SleepObservation[] = [];
+  const refresh: SleepObservation[] = [];
+
+  for (let i = 0; i < allVectors.length; i++) {
+    const v = allVectors[i];
+    const createdAt = new Date(v.created_at).getTime();
+    const age = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
+    const redundancy = Math.round(scores[i] * 1000) / 1000;
+    const recallCount = v.recall_count ?? 0;
+
+    if (age < ageDays) continue; // Too young — healthy
+
+    const obs: SleepObservation = {
+      observation_id: v.observation_id,
+      entity: v.entity_name,
+      type: v.entity_type,
+      content: v.content,
+      remembered_at: v.created_at,
+      age_days: age,
+      recall_count: recallCount,
+      redundancy,
+    };
+
+    if (recallCount === 0) {
+      // Never recalled + old → prune candidate
+      prune.push(obs);
+    } else if (redundancy >= 0.5 && recallCount > 0) {
+      // Redundant + recalled + old → compress candidate
+      compress.push(obs);
+    } else if (recallCount >= 3 && redundancy < 0.5) {
+      // Actively used + unique + old → refresh candidate
+      refresh.push(obs);
+    }
+  }
+
+  // Sort each category for actionability
+  compress.sort((a, b) => b.redundancy - a.redundancy);
+  prune.sort((a, b) => b.age_days - a.age_days);
+  refresh.sort((a, b) => b.recall_count - a.recall_count);
+
+  const total = compress.length + prune.length + refresh.length;
+  const message = total === 0
+    ? `Scanned ${allVectors.length} observations — all healthy (young or actively used with unique content).`
+    : `Found ${compress.length} to compress, ${prune.length} to prune, ${refresh.length} to refresh across ${allVectors.length} observations. Information rank: ${rank}/${allVectors.length} (${Math.round(redundancyRatio * 100)}% redundant).`;
+
+  return {
+    success: true,
+    entity: input.entity,
+    total_observations: allVectors.length,
+    information_rank: rank,
+    redundancy_ratio: redundancyRatio,
+    compress,
+    prune,
+    refresh,
+    message,
   };
 }

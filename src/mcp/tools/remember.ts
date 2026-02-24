@@ -4,6 +4,7 @@ import { createObservation, deleteObservation } from '../../db/observations.js';
 import { createRelationship, relationshipExists } from '../../db/relationships.js';
 import { generateEmbedding, storeEmbedding, getEmbeddingsByEntity, deleteEmbedding } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
+import { computeNovelty } from '../../embeddings/subspace.js';
 
 const DEDUP_THRESHOLD = 0.85;
 const NEAR_MATCH_THRESHOLD = 0.5;
@@ -38,6 +39,7 @@ export interface RememberResult {
   deduplicated?: boolean;
   replaced_observation?: string;
   near_matches?: Array<{ content: string; similarity: number }>;
+  novelty?: number;
 }
 
 export async function remember(input: RememberInput): Promise<RememberResult> {
@@ -108,6 +110,11 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
 
   const relationshipsCreated = detectAndCreateRelationships(entity, input.content);
 
+  // Compute subspace novelty against all existing observations
+  const novelty = existing.length > 0
+    ? Math.round(computeNovelty(vector, existing.map(e => e.vector)) * 1000) / 1000
+    : 1.0;
+
   const result: RememberResult = {
     success: true,
     entityId: entity.id,
@@ -115,7 +122,12 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
     observationId: observation.id,
     relationships_created: relationshipsCreated,
     message: `Remembered: "${input.content.slice(0, 50)}${input.content.length > 50 ? '...' : ''}" for entity "${entity.name}"`,
+    novelty,
   };
+
+  if (novelty < 0.1) {
+    result.message += '. Low novelty — this information may already be captured by existing observations';
+  }
 
   if (nearMatches.length > 0) {
     result.near_matches = nearMatches;

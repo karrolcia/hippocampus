@@ -33,6 +33,7 @@ interface MemoryResult {
   kind: string | null;
   remembered_at: string;
   similarity?: number;
+  stale?: boolean;
 }
 
 export interface RecallResult {
@@ -151,6 +152,29 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
 
     // Re-sort all memories by similarity descending
     memories.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
+  }
+
+  // Reconsolidation hints: flag observations that may need updating
+  const STALE_AGE_DAYS = 30;
+  const now = Date.now();
+  const entityUpdateCache = new Map<string, string>(); // entity name → updated_at
+
+  for (const m of memories) {
+    const createdAt = new Date(m.remembered_at).getTime();
+    const ageDays = (now - createdAt) / (1000 * 60 * 60 * 24);
+    if (ageDays <= STALE_AGE_DAYS) continue;
+
+    // Look up entity updated_at (cached per entity name)
+    let updatedAt = entityUpdateCache.get(m.entity);
+    if (updatedAt === undefined) {
+      const entity = findEntityByName(m.entity);
+      updatedAt = entity?.updated_at ?? '';
+      entityUpdateCache.set(m.entity, updatedAt);
+    }
+
+    if (updatedAt && new Date(updatedAt).getTime() > createdAt) {
+      m.stale = true;
+    }
   }
 
   const limited = memories.slice(0, input.limit);

@@ -389,7 +389,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'consolidate',
-    'Identify groups of similar or overlapping memories that could be merged into fewer, denser observations. Returns clusters — review each cluster and use merge to consolidate.',
+    'Identify groups of similar or overlapping memories that could be merged into fewer, denser observations. Returns clusters — review each cluster and use merge to consolidate. "sleep" mode runs batch lifecycle analysis: identifies observations to compress (redundant), prune (never recalled), or refresh (actively used but stale).',
     {
       entity: z
         .string()
@@ -403,9 +403,15 @@ export function createMcpServer(): McpServer {
         .default(0.8)
         .describe('Cosine similarity threshold for clustering (0.5-1.0, default 0.8). Lower = more aggressive grouping.'),
       mode: z
-        .enum(['observations', 'entities', 'contradictions'])
+        .enum(['observations', 'entities', 'contradictions', 'sleep'])
         .default('observations')
-        .describe('"observations" (default) finds similar observations to merge. "entities" finds entity names that likely refer to the same thing. "contradictions" finds same-topic observations with conflicting content.'),
+        .describe('"observations" (default) finds similar observations to merge. "entities" finds entity names that likely refer to the same thing. "contradictions" finds same-topic observations with conflicting content. "sleep" runs batch lifecycle analysis — identifies compress/prune/refresh candidates.'),
+      age_days: z
+        .number()
+        .min(1)
+        .max(365)
+        .default(30)
+        .describe('Minimum age in days for sleep mode candidates (default 30). Only observations older than this are analyzed.'),
     },
     async (args) => {
       try {
@@ -413,6 +419,7 @@ export function createMcpServer(): McpServer {
           entity: args.entity,
           threshold: args.threshold,
           mode: args.mode,
+          age_days: args.age_days,
         });
         return {
           content: [
