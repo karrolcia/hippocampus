@@ -389,7 +389,7 @@ You're responsible for uptime and physical security. See [SECURITY.md](SECURITY.
 
 | Tool | Description |
 |------|-------------|
-| `remember` | Store a fact, preference, or piece of context. Optional `kind` classification (fact, decision, question, preference, or custom) and `importance` weighting. |
+| `remember` | Store a fact, preference, or piece of context. Optional `kind` classification (fact, decision, question, preference, or custom) and `importance` weighting. Reports overlapping observations so the AI can consolidate incrementally. |
 | `recall` | Search memories by semantic similarity + keyword match. Filter by `type`, `kind`, `since`. Use `spread: true` to follow relationships and discover connected memories. |
 | `context` | Get everything about a topic — observations, relationships, related entities |
 | `update` | Replace an existing observation with new content |
@@ -408,6 +408,14 @@ When you `recall` with `spread: true`, Hippocampus doesn't just return direct ma
 ### Contradiction detection
 
 `consolidate` with `mode: "contradictions"` finds observation pairs that talk about the same thing (high embedding similarity) but say different things (low word overlap). No LLM required — pure embedding math plus Jaccard comparison. Review the flagged pairs and decide what to keep.
+
+### Near-match detection
+
+When `remember` stores a new observation, it reports existing observations that overlap (cosine similarity 0.5–0.85) — the zone between "clearly different" and "near-duplicate." The AI sees these in the response and can consolidate immediately instead of waiting for a batch `consolidate` pass. No extra computation: the dedup scan already compares against all entity embeddings.
+
+### Onboarding
+
+New databases start cold — the `hippocampus://context` resource shows guidance prompting the AI to capture what it already knows about you (identity, projects, preferences). Once 5+ observations exist, the guidance disappears and the full knowledge graph takes over.
 
 ## Configuration
 
