@@ -31,7 +31,7 @@ Cursor / Windsurf ────┤
 Perplexity ───────────┘
 ```
 
-[MCP](https://modelcontextprotocol.io/) (Model Context Protocol) is the open standard every major AI platform has adopted. Hippocampus is a remote MCP server that exposes memory tools over Streamable HTTP — `remember`, `recall`, `forget`, and six more. Any AI client that supports MCP can connect.
+[MCP](https://modelcontextprotocol.io/) (Model Context Protocol) is the open standard every major AI platform has adopted. Hippocampus is a remote MCP server that exposes memory tools over Streamable HTTP — `remember`, `recall`, `forget`, and eight more. Any AI client that supports MCP can connect.
 
 Data model: knowledge graph with entities, observations, and relationships. Semantic search via local embeddings. Entire database encrypted at rest with SQLCipher (AES-256) — including embedding vectors, which [leak original text](https://arxiv.org/abs/2305.03010).
 
@@ -389,15 +389,17 @@ You're responsible for uptime and physical security. See [SECURITY.md](SECURITY.
 
 | Tool | Description |
 |------|-------------|
-| `remember` | Store a fact, preference, or piece of context. Optional `kind` classification (fact, decision, question, preference, or custom) and `importance` weighting. Reports overlapping observations so the AI can consolidate incrementally. |
-| `recall` | Search memories by semantic similarity + keyword match. Filter by `type`, `kind`, `since`. Use `spread: true` to follow relationships and discover connected memories. |
-| `context` | Get everything about a topic — observations, relationships, related entities |
-| `update` | Replace an existing observation with new content |
+| `remember` | Store a fact, preference, or piece of context. Optional `kind` classification (fact, decision, question, preference, or custom) and `importance` weighting. Reports overlapping observations so the AI can consolidate incrementally. Returns `version_hash` for cache invalidation. |
+| `recall` | Search memories by semantic similarity + keyword match. Filter by `type`, `kind`, `since`. Use `spread: true` to follow relationships and discover connected memories. Includes `version_hash` per entity in all formats. |
+| `context` | Get everything about a topic — observations, relationships, related entities. Includes `version_hash`. |
+| `update` | Replace an existing observation with new content. Returns `version_hash`. |
 | `forget` | Permanently delete a memory or entity (secure deletion) |
-| `merge` | Merge multiple observations into one (atomic consolidation) |
-| `merge_entities` | Merge multiple entities into one — moves all data, deletes sources |
+| `merge` | Merge multiple observations into one (atomic consolidation). Returns `version_hash`. |
+| `merge_entities` | Merge multiple entities into one — moves all data, deletes sources. Returns `version_hash`. |
 | `consolidate` | Find clusters of similar/duplicate memories, detect near-duplicate entities, surface contradictions, or run sleep mode for batch lifecycle analysis (compress/prune/refresh) |
 | `export` | Export as CLAUDE.md context file, readable markdown, JSON, wire format, or Obsidian vault |
+| `check_version` | "Did anything change?" — pass an entity name + cached hash, get back yes/no. No embedding computation, pure metadata. |
+| `onboard` | Bootstrap memory from a new AI session. Returns structured extraction instructions the AI follows to capture user context. |
 
 The AI calls these tools naturally. You don't manage memory manually — you just talk to your AI and it remembers.
 
@@ -431,9 +433,17 @@ Returns `information_rank` and `redundancy_ratio` per entity for structural diag
 
 When `recall` returns observations older than 30 days on an entity that has received newer information since, they're flagged `stale: true`. Lightweight date comparison on every retrieval — no embedding computation. The AI sees the flag and can decide whether to update or leave the observation as-is.
 
+### Cross-platform staleness detection
+
+You told Claude about your project stack on Monday. On Wednesday you switched to Gemini. Is Gemini's cached context still current? Every entity carries a `version_hash` — SHA-256 of its observation content. The AI caches this hash, and later calls `check_version` to ask "did anything change?" without re-fetching everything. One lightweight metadata call instead of re-reading the entire entity.
+
+All mutation tools return the new hash after writing. All read tools include it in the response. The AI always has a fresh hash to cache — no extra round trip.
+
 ### Onboarding
 
 New databases start cold — the `hippocampus://context` resource shows guidance prompting the AI to capture what it already knows about you (identity, projects, preferences). Once 5+ observations exist, the guidance disappears and the full knowledge graph takes over.
+
+For systematic first-session extraction, the `onboard` tool returns a structured prompt the AI follows — what to look for, what's already stored, what format to use. The tool stores nothing itself; it hands the AI a checklist and lets it do what it's good at. Each platform uses its own context for extraction.
 
 ## Configuration
 
@@ -494,8 +504,8 @@ src/
 ├── index.ts              # Hono server, MCP Streamable HTTP transport
 ├── config.ts             # Environment config with Zod validation
 ├── mcp/
-│   ├── server.ts         # MCP tool registration (9 tools)
-│   └── tools/            # remember, recall, forget, update, merge, merge_entities, context, consolidate, export
+│   ├── server.ts         # MCP tool registration (11 tools)
+│   └── tools/            # remember, recall, forget, update, merge, merge_entities, context, consolidate, export, check_version, onboard
 ├── db/
 │   ├── index.ts          # SQLCipher initialization
 │   ├── schema.ts         # Schema + migrations
@@ -517,7 +527,7 @@ src/
 # Unit + integration tests
 npm test
 
-# Full end-to-end smoke test (all 9 tools, real embeddings, temp encrypted DB)
+# Full end-to-end smoke test (real embeddings, temp encrypted DB)
 HIPPO_PASSPHRASE=test HIPPO_DB_PATH=/tmp/hippo-test.db npx tsx test-all-tools.ts
 ```
 
