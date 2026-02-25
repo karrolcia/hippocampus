@@ -1,8 +1,7 @@
-# Replace with your domain
+# Hippocampus MCP server
 memory.yourdomain.com {
     reverse_proxy hippocampus:3000
 
-    # Security headers
     header {
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
@@ -11,12 +10,69 @@ memory.yourdomain.com {
         -Server
     }
 
-    # Logging (no request/response bodies)
     log {
         output stdout
         format json
         level INFO
     }
+}
+
+# karolinasarna.com
+karolinasarna.com {
+    root * /srv/karolinasarna.com
+    file_server
+
+    handle_errors {
+        rewrite * /404.html
+        file_server
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    @static path *.css *.js *.png *.jpg *.jpeg *.gif *.ico *.svg *.woff *.woff2
+    header @static Cache-Control "public, max-age=2592000, immutable"
+
+    @html path *.html
+    header @html Cache-Control "no-cache"
+}
+
+# www redirect
+www.karolinasarna.com {
+    redir https://karolinasarna.com{uri} permanent
+}
+
+# rebelstrategylab.com
+rebelstrategylab.com {
+    root * /srv/rebelstrategylab.com
+    file_server
+
+    handle_errors {
+        rewrite * /404.html
+        file_server
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    @static path *.css *.js *.png *.jpg *.jpeg *.gif *.ico *.svg *.woff *.woff2
+    header @static Cache-Control "public, max-age=2592000, immutable"
+
+    @html path *.html
+    header @html Cache-Control "no-cache"
+}
+
+# www redirect
+www.rebelstrategylab.com {
+    redir https://rebelstrategylab.com{uri} permanent
 }
 
 # Local development (HTTP only)
