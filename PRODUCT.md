@@ -70,10 +70,15 @@ Knowledge graph: entities → observations → relationships.
 
 ```sql
 -- Entities: people, projects, concepts, preferences
-entities (id, name, type, created_at, updated_at)
+-- version_hash: SHA-256 of sorted observation content (cross-platform staleness detection)
+entities (id, name, type, created_at, updated_at, version_hash, version_at)
 
--- Observations: facts about entities (append-only log)
-observations (id, entity_id, content, source, created_at)
+-- Observations: facts about entities
+-- kind: fact, decision, question, preference (or custom). Filterable.
+-- importance: manual boost (0.0-1.0) for always-relevant facts
+-- recall tracking: last_recalled_at + recall_count for decay-weighted retrieval
+observations (id, entity_id, content, source, kind, importance, created_at,
+             last_recalled_at, recall_count)
 
 -- Relationships: connections between entities
 relationships (id, from_entity, to_entity, relation_type, created_at)
@@ -82,28 +87,53 @@ relationships (id, from_entity, to_entity, relation_type, created_at)
 embeddings (id, entity_id, observation_id, vector, text_content, created_at)
 ```
 
-Entire database encrypted at rest. Embeddings included — research shows original text can be reconstructed from embedding vectors.
+Schema V6 (current). Entire database encrypted at rest with SQLCipher. Embeddings included — research shows original text can be reconstructed from embedding vectors.
 
-### MCP Tools
+### MCP Tools (11)
 
 ```
-remember(content, entity?, type?, source?)
-  → Store new information. Claude structures it naturally.
+remember(content, entity?, type?, source?, importance?, kind?)
+  → Store a fact. Dedup on write (cosine >= 0.85), near-match detection (0.5-0.85),
+    subspace novelty scoring via SVD. Returns version_hash.
 
-recall(query, limit?, type?, since?)
-  → Search memories by semantic similarity.
+recall(query, limit?, type?, since?, kind?, spread?, format?)
+  → Semantic + keyword search. 4 formats (full/compact/wire/index).
+    Spreading activation follows relationships 1 hop. Reconsolidation
+    hints flag stale observations. Includes version_hash per entity.
 
 forget(entity?, observation_id?)
-  → Remove a memory. Uses secure deletion (zeros freed pages).
+  → Permanent deletion. PRAGMA secure_delete = ON — zeros freed pages.
 
 update(entity, old_content, new_content)
-  → Modify an existing memory.
+  → Replace observation by exact content match. Returns version_hash.
+
+merge(observation_ids, content)
+  → Atomic consolidation. Replace N observations with one merged text.
+    Returns version_hash.
+
+merge_entities(source_entities, target_entity)
+  → Structural consolidation. Moves all data, deletes sources.
+    Returns version_hash.
 
 context(topic, depth?)
-  → Graph traversal. Get everything about a topic + related entities.
+  → Graph traversal. Entity + observations + relationships + related
+    entities via BFS. Includes version_hash.
 
-export(format: 'claude-md' | 'markdown' | 'json', filter?)
-  → Generate CLAUDE.md or structured export from memories.
+consolidate(entity?, threshold?, mode?, age_days?)
+  → 4 modes: observations (dedup clusters), entities (name resolution),
+    contradictions (conflicting claims), sleep (lifecycle analysis —
+    compress/prune/refresh candidates).
+
+export(format, entity?, type?)
+  → 5 formats: claude-md, markdown, json, wire, obsidian.
+
+check_version(entity, version_hash?)
+  → "Did anything change?" Cached hash in, is_current boolean out.
+    No embeddings, no content — pure metadata.
+
+onboard(source?)
+  → Bootstrap memory from a new AI session. Returns extraction
+    instructions the AI follows. Lists existing entities to avoid dupes.
 ```
 
 ### File Structure
@@ -111,22 +141,28 @@ export(format: 'claude-md' | 'markdown' | 'json', filter?)
 ```
 hippocampus/
 ├── src/
-│   ├── index.ts              # Hono server, MCP transport
+│   ├── index.ts              # Hono server, MCP Streamable HTTP transport
+│   ├── config.ts             # Environment config with Zod validation
 │   ├── mcp/
-│   │   ├── server.ts         # MCP server, tool registration
-│   │   └── tools/            # remember, recall, forget, update, context, export
+│   │   ├── server.ts         # MCP server, tool + resource registration (11 tools)
+│   │   ├── tools/            # One file per tool
+│   │   └── resources/        # MCP resources (proactive context injection)
 │   ├── db/
-│   │   ├── schema.ts         # SQLCipher schema + migrations
-│   │   ├── entities.ts       # Entity CRUD
-│   │   ├── observations.ts   # Observation CRUD
-│   │   └── relationships.ts  # Relationship CRUD
+│   │   ├── index.ts          # SQLCipher initialization
+│   │   ├── schema.ts         # Schema V1-V6 + migrations
+│   │   ├── entities.ts       # Entity CRUD + version hashing
+│   │   ├── observations.ts   # Observation CRUD + keyword search + access tracking
+│   │   └── relationships.ts  # Relationship CRUD + BFS graph traversal
 │   ├── embeddings/
-│   │   └── embedder.ts       # Local embedding generation + search
+│   │   ├── embedder.ts       # Local embeddings (all-MiniLM-L6-v2) + semantic search
+│   │   ├── similarity.ts     # Cosine similarity
+│   │   └── subspace.ts       # SVD novelty scoring + redundancy analysis
 │   └── auth/
 │       └── oauth.ts          # Self-contained OAuth 2.1 server
+├── tests/                    # node:test — consolidation, lifecycle, features, resources, efficiency, versioning
 ├── Dockerfile
 ├── docker-compose.yml
-├── Caddyfile                 # Reverse proxy config
+├── Caddyfile                 # Reverse proxy config (Caddy auto-TLS)
 ├── package.json
 ├── tsconfig.json
 ├── .env.example
@@ -154,27 +190,16 @@ No hosted version. No SaaS. No customer support obligations. No liability for ot
 
 Stripe Payment Link in the README: "If Hippocampus is useful, buy me a coffee." One-time donations, not subscriptions.
 
-## Development Plan
+## What Shipped
 
-### Day 1: Core server + remember/recall
-- Hono + MCP SDK + Streamable HTTP transport
-- SQLCipher encrypted database + entity/observation CRUD
-- `remember` and `recall` tools (keyword search first)
-- Docker setup
-- Test with Claude Code locally
+### 0.1.0 — Core
+Core server, 6 tools (remember, recall, forget, update, context, export), SQLCipher encryption, local embeddings, OAuth 2.1, Docker + Caddy. Dedup on write, near-match detection, compact/wire/index recall formats, budgeted context resource, adaptive onboarding, contradiction detection, entity resolution, spreading activation.
 
-### Day 2: Semantic search + remaining tools
-- Local embeddings (`@xenova/transformers`)
-- Semantic `recall`
-- `forget`, `update`, `context` tools
-- OAuth 2.1 implementation
-- Test from claude.ai as custom connector
+### 0.2.0 — Memory Lifecycle
+Subspace novelty scoring (SVD), sleep mode (compress/prune/refresh lifecycle analysis), reconsolidation hints on recall, observation kind and importance. The "overnight defrag" for knowledge graphs.
 
-### Day 3: Export + cross-platform + polish
-- `export` tool (CLAUDE.md generation)
-- Test from ChatGPT, Gemini CLI
-- Write README with self-hosting guide
-- Push to GitHub
+### 0.3.0 — Cross-Platform Staleness
+Entity versioning (SHA-256 hash per entity, recomputed on every mutation), `check_version` tool (cached hash in, is_current boolean out), `onboard` tool (guided first-session extraction), version_hash propagated through all tool responses. The "did anything change while I was in ChatGPT?" release.
 
 ## Differentiation
 
@@ -183,7 +208,7 @@ Nobody else is building this:
 - **ChatGPT memory** — ChatGPT only. Siloed.
 - **CLAUDE.md files** — Claude Code only. Local files on disk.
 - **Mem0** — Local MCP server. Doesn't work across platforms.
-- **Hippocampus** — One server, every AI platform, knowledge graph with semantic search, self-hosted and encrypted.
+- **Hippocampus** — One server, every AI platform, knowledge graph with semantic search, self-hosted and encrypted. Cross-platform staleness detection so AIs know when their cached context is stale without re-fetching everything.
 
 ## Name
 
