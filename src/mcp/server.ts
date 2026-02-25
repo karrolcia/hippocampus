@@ -27,8 +27,8 @@ export function createMcpServer(): McpServer {
       content: z
         .string()
         .min(1)
-        .max(2000)
-        .describe('The information to remember (max 2000 chars). Use compact, telegraphic style. Example: "PhD atmospheric physics, TU Delft" instead of "She has a PhD in atmospheric physics from TU Delft."'),
+        .max(50000)
+        .describe('The information to remember (max 50000 chars. Note: semantic search uses first ~1500 chars for matching; longer content is still fully stored and retrievable by entity name, keyword, or context tool). Use compact, telegraphic style. Example: "PhD atmospheric physics, TU Delft" instead of "She has a PhD in atmospheric physics from TU Delft."'),
       entity: z
         .string()
         .max(200)
@@ -215,12 +215,12 @@ export function createMcpServer(): McpServer {
       old_content: z
         .string()
         .min(1)
-        .max(2000)
+        .max(50000)
         .describe('Exact content of the observation to replace'),
       new_content: z
         .string()
         .min(1)
-        .max(2000)
+        .max(50000)
         .describe('New content to replace with'),
     },
     async (args) => {
@@ -264,7 +264,7 @@ export function createMcpServer(): McpServer {
       content: z
         .string()
         .min(1)
-        .max(2000)
+        .max(50000)
         .describe('The merged content combining information from all observations'),
     },
     async (args) => {

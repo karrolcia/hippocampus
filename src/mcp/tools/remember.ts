@@ -14,7 +14,7 @@ export const rememberSchema = z.object({
   content: z
     .string()
     .min(1, 'Content is required')
-    .max(2000, 'Content must be 2000 characters or less')
+    .max(50000, 'Content must be 50000 characters or less')
     .transform(s => s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')),
   entity: z
     .string()

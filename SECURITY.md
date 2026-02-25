@@ -63,7 +63,7 @@ POST /register
 ### 4. Input Validation & Prompt Injection Defense
 Memories get injected into LLM context. This is a prompt injection vector.
 
-- Max content length: 2,000 chars per memory
+- Max content length: 50,000 chars per memory
 - Max entity name: 200 chars
 - Strip null bytes, control characters
 - Memories wrapped in clear delimiters when returned:
