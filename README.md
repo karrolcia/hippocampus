@@ -85,7 +85,7 @@ curl http://localhost:3000/health
 Expected response:
 
 ```json
-{"status":"ok","version":"0.2.0"}
+{"status":"ok","version":"0.3.0"}
 ```
 
 **5. Connect Claude Code**
@@ -211,7 +211,7 @@ curl https://hippo.yourdomain.com/health
 Expected response:
 
 ```json
-{"status":"ok","version":"0.2.0"}
+{"status":"ok","version":"0.3.0"}
 ```
 
 If you get a certificate error, DNS might not have propagated yet. Wait a few minutes and retry.
