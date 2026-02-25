@@ -19,7 +19,7 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - Knowledge graph: entities → observations → relationships
 - Semantic search via local embeddings (no external API keys)
 - Entire database encrypted at rest (including embedding vectors — they leak original text)
-- MCP tools: remember, recall, forget, update, merge, merge_entities, context, consolidate, export
+- MCP tools: remember, recall, forget, update, merge, merge_entities, context, consolidate, export, check_version, onboard
 - MCP resources: `hippocampus://context` (full knowledge graph, claude-md format), `hippocampus://entity/{name}` (per-entity context with relationships)
 
 ## Key Design Decisions
@@ -48,6 +48,13 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - **Subspace novelty scoring**: `remember` returns `novelty` (0–1) via SVD projection. Pairwise cosine misses aggregate redundancy — five observations that individually have moderate similarity can collectively explain a new observation entirely. SVD projection compares against all observations simultaneously. When novelty < 0.1, the response flags it. Dependency: `ml-matrix` (~50KB, pure JS, zero native deps).
 - **Sleep mode**: `consolidate mode: "sleep"` — batch lifecycle analysis inspired by hippocampal memory consolidation during sleep. SVD leverage scores + temporal signals classify observations into compress (redundant + old + recalled → merge candidates), prune (never recalled + old → delete candidates), and refresh (actively used + unique + old → reconsolidation candidates). Returns `information_rank` and `redundancy_ratio` per entity for structural diagnosis.
 - **Reconsolidation hints**: `recall` flags `stale: true` on observations older than 30 days when the entity has received newer information since. Lightweight — date comparison only, no embedding computation. The AI can then use `update` to refresh stale facts.
+- **Entity versioning**: Schema V6 — `version_hash TEXT` + `version_at TEXT` on entities. SHA-256 of all observation content sorted by observation ID, recomputed on every mutation via `updateEntityTimestamp`. Solves cross-platform staleness: an artifact stored via Claude is usable in Gemini/ChatGPT — the AI caches the hash and checks freshness later without re-fetching content.
+- **Entity-level versioning, not observation-level supersession**: Original design considered `supersedes`/`superseded_by` on observations, but that requires soft-delete model — every query path (semantic search, keyword search, consolidate, export, context, spreading) would need supersession filters. Conflicts with `PRAGMA secure_delete = ON`. Entity version hash solves the actual problem (staleness detection) without touching the deletion model.
+- **Version hash = SHA-256 of sorted observation content**: Sort by observation ID (UUID, stable), concatenate content with null byte separator, hash. Deterministic — same observations always produce same hash. Recomputed on every entity mutation via `updateEntityTimestamp` (already called by remember, update, merge, forget).
+- **check_version tool**: Lightweight staleness check — AI sends entity name + cached `version_hash`, gets back `is_current` boolean + current version info. No embedding computation, no observation content returned. Purely metadata.
+- **Version hash in tool responses**: All mutation tools (remember, update, merge, merge_entities) return `version_hash` so AIs can cache it. Recall includes `version_hash` per entity in all formats (full: per memory, compact/wire: entity header `[v:XXXXXXXX]`, index: appended to entity line). Context tool includes `version_hash` on the main entity.
+- **Onboard tool**: Returns structured extraction instructions the AI follows to systematically capture user context. Lists existing entities to avoid duplicates. The tool doesn't extract anything itself — it returns a prompt. Keeps the tool stateless; each AI platform uses its own context for extraction. Optional `source` param adds platform-specific hint.
+- **Adaptive onboarding updated**: `hippocampus://context` sparse guidance (< 5 observations) now mentions the `onboard` tool alongside direct `remember` usage.
 
 ## Security Rules
 - NEVER log memory content, observation text, embeddings, tokens, or passphrase
