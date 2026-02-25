@@ -29,7 +29,8 @@ export function registerContextResources(server: McpServer): void {
           '',
           'Few memories stored. To build a useful knowledge base, capture what you',
           'already know about this user — identity, active projects, preferences,',
-          'working patterns. Use the remember tool, one fact per call, telegraphic form.',
+          'working patterns. Use the onboard tool for systematic extraction, or',
+          'remember individual facts directly (one fact per call, telegraphic form).',
         ];
 
         // Append existing knowledge if any observations exist

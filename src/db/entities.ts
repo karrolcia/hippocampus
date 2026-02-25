@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { getDatabase } from './index.js';
 
 export interface Entity {
@@ -7,6 +7,8 @@ export interface Entity {
   type: string | null;
   created_at: string;
   updated_at: string;
+  version_hash: string | null;
+  version_at: string | null;
 }
 
 export function findEntityById(id: string): Entity | undefined {
@@ -61,6 +63,54 @@ export function updateEntityTimestamp(id: string): void {
   db.prepare(`
     UPDATE entities SET updated_at = datetime('now') WHERE id = ?
   `).run(id);
+  updateEntityVersion(id);
+}
+
+export function updateEntityVersion(entityId: string): void {
+  const db = getDatabase();
+
+  // Fetch all observations for this entity, sorted by ID (UUID, stable order)
+  const observations = db.prepare(
+    'SELECT id, content FROM observations WHERE entity_id = ? ORDER BY id ASC'
+  ).all(entityId) as Array<{ id: string; content: string }>;
+
+  if (observations.length === 0) {
+    db.prepare(
+      'UPDATE entities SET version_hash = NULL, version_at = NULL WHERE id = ?'
+    ).run(entityId);
+    return;
+  }
+
+  // SHA-256 of concatenated content (sorted by observation ID)
+  const hash = createHash('sha256');
+  for (const obs of observations) {
+    hash.update(obs.content);
+    hash.update('\x00'); // null byte separator
+  }
+  const versionHash = hash.digest('hex');
+
+  db.prepare(
+    "UPDATE entities SET version_hash = ?, version_at = datetime('now') WHERE id = ?"
+  ).run(versionHash, entityId);
+}
+
+export interface EntityVersion {
+  name: string;
+  version_hash: string | null;
+  version_at: string | null;
+  observation_count: number;
+}
+
+export function getEntityVersion(entityName: string): EntityVersion | null {
+  const db = getDatabase();
+  const row = db.prepare(`
+    SELECT e.name, e.version_hash, e.version_at,
+           (SELECT COUNT(*) FROM observations WHERE entity_id = e.id) as observation_count
+    FROM entities e
+    WHERE e.name = ?
+  `).get(entityName) as (EntityVersion) | undefined;
+
+  return row ?? null;
 }
 
 export function deleteEntity(id: string): boolean {

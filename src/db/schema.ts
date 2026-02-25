@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3-multiple-ciphers';
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const SCHEMA_V1_SQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -69,6 +69,11 @@ ALTER TABLE observations ADD COLUMN kind TEXT;
 CREATE INDEX IF NOT EXISTS idx_observations_kind ON observations(kind);
 `;
 
+const SCHEMA_V6_SQL = `
+ALTER TABLE entities ADD COLUMN version_hash TEXT;
+ALTER TABLE entities ADD COLUMN version_at TEXT;
+`;
+
 export function initializeSchema(db: Database.Database): void {
   db.exec(SCHEMA_V1_SQL);
 
@@ -95,6 +100,12 @@ export function initializeSchema(db: Database.Database): void {
     // V5: optional observation kind (fact, decision, question, preference, or custom)
     // ALTER TABLE ADD COLUMN is safe — existing rows get NULL (no kind)
     db.exec(SCHEMA_V5_SQL);
+  }
+
+  if (currentVersion < 6) {
+    // V6: entity version hash for cross-platform staleness detection
+    // ALTER TABLE ADD COLUMN is safe — existing rows get NULL (computed on next mutation)
+    db.exec(SCHEMA_V6_SQL);
   }
 
   if (!versionRow) {

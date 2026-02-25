@@ -10,6 +10,8 @@ import { mergeEntities } from './tools/merge-entities.js';
 import { context } from './tools/context.js';
 import { consolidate } from './tools/consolidate.js';
 import { exportMemories } from './tools/export.js';
+import { checkVersion } from './tools/check-version.js';
+import { onboard } from './tools/onboard.js';
 import { registerContextResources } from './resources/context.js';
 
 export function createMcpServer(): McpServer {
@@ -468,6 +470,82 @@ export function createMcpServer(): McpServer {
           entity: args.entity,
           type: args.type,
         });
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    'check_version',
+    'Check if cached entity content is still current. Pass a previously received version_hash to verify freshness. Returns current version info.',
+    {
+      entity: z
+        .string()
+        .min(1)
+        .max(200)
+        .describe('Entity name to check version for'),
+      version_hash: z
+        .string()
+        .optional()
+        .describe('Previously received version_hash to compare against current'),
+    },
+    async (args) => {
+      try {
+        const result = checkVersion({
+          entity: args.entity,
+          version_hash: args.version_hash,
+        });
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    'onboard',
+    'Bootstrap memory from the current AI session. Returns extraction instructions — follow them to capture user context into Hippocampus.',
+    {
+      source: z
+        .string()
+        .optional()
+        .describe('AI platform name (e.g., "claude", "chatgpt", "cursor", "gemini")'),
+    },
+    async (args) => {
+      try {
+        const result = onboard({ source: args.source });
         return {
           content: [
             {

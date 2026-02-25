@@ -1,4 +1,4 @@
-import { findEntityByName, findEntityById, searchEntities } from '../../db/entities.js';
+import { findEntityByName, findEntityById, searchEntities, getEntityVersion } from '../../db/entities.js';
 import { getObservationsByEntity, type Observation } from '../../db/observations.js';
 import { getRelationshipsByEntity, getRelatedEntities } from '../../db/relationships.js';
 import { semanticSearch } from '../../embeddings/embedder.js';
@@ -11,6 +11,7 @@ export interface ContextInput {
 interface EntityContext {
   name: string;
   type: string | null;
+  version_hash?: string | null;
   observations: Array<{ content: string; source: string | null; remembered_at: string }>;
 }
 
@@ -62,9 +63,11 @@ export async function context(input: ContextInput): Promise<ContextResult> {
 
   // Get observations for the main entity
   const observations = getObservationsByEntity(entity.id);
+  const version = getEntityVersion(entity.name);
   const entityContext: EntityContext = {
     name: entity.name,
     type: entity.type,
+    version_hash: version?.version_hash ?? null,
     observations: observations.map(formatObs),
   };
 

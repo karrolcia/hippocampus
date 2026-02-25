@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { getDatabase } from '../../db/index.js';
-import { findEntityByName, findOrCreateEntity, deleteEntity } from '../../db/entities.js';
+import { findEntityByName, findEntityById, findOrCreateEntity, deleteEntity, updateEntityTimestamp } from '../../db/entities.js';
 import { moveObservationsToEntity } from '../../db/observations.js';
 import { moveEmbeddingsToEntity } from '../../embeddings/embedder.js';
 import { mergeRelationships } from '../../db/relationships.js';
@@ -25,6 +25,7 @@ export interface MergeEntitiesResult {
   relationships_updated: number;
   deleted_entities: string[];
   message: string;
+  version_hash?: string | null;
 }
 
 export function mergeEntities(input: MergeEntitiesInput): MergeEntitiesResult {
@@ -75,6 +76,10 @@ export function mergeEntities(input: MergeEntitiesInput): MergeEntitiesResult {
 
   transaction();
 
+  // Refresh version hash on target after merge
+  updateEntityTimestamp(targetEntity.id);
+  const updated = findEntityById(targetEntity.id);
+
   return {
     success: true,
     target_entity: targetEntity.name,
@@ -84,5 +89,6 @@ export function mergeEntities(input: MergeEntitiesInput): MergeEntitiesResult {
     relationships_updated: totalRelationships,
     deleted_entities: deletedEntities,
     message: `Merged ${sourceEntities.length} entities into "${targetEntity.name}": ${totalObservations} observations, ${totalEmbeddings} embeddings, ${totalRelationships} relationship updates`,
+    version_hash: updated?.version_hash,
   };
 }

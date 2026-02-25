@@ -1,4 +1,4 @@
-import { findEntityByName, updateEntityTimestamp } from '../../db/entities.js';
+import { findEntityByName, findEntityById, updateEntityTimestamp } from '../../db/entities.js';
 import { getObservationsByEntity, createObservation, deleteObservation } from '../../db/observations.js';
 import { generateEmbedding, storeEmbedding, deleteEmbedding } from '../../embeddings/embedder.js';
 
@@ -12,6 +12,7 @@ export interface UpdateResult {
   success: boolean;
   message: string;
   observationId?: string;
+  version_hash?: string | null;
 }
 
 export async function update(input: UpdateInput): Promise<UpdateResult> {
@@ -44,9 +45,12 @@ export async function update(input: UpdateInput): Promise<UpdateResult> {
 
   updateEntityTimestamp(entity.id);
 
+  const updated = findEntityById(entity.id);
+
   return {
     success: true,
     message: `Updated observation for entity "${input.entity}".`,
     observationId: newObs.id,
+    version_hash: updated?.version_hash,
   };
 }

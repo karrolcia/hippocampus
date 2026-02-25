@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { findOrCreateEntity, listEntities, type Entity } from '../../db/entities.js';
+import { findOrCreateEntity, findEntityById, listEntities, type Entity } from '../../db/entities.js';
 import { createObservation, deleteObservation } from '../../db/observations.js';
 import { createRelationship, relationshipExists } from '../../db/relationships.js';
 import { generateEmbedding, storeEmbedding, getEmbeddingsByEntity, deleteEmbedding } from '../../embeddings/embedder.js';
@@ -36,6 +36,7 @@ export interface RememberResult {
   observationId: string;
   relationships_created: string[];
   message: string;
+  version_hash?: string | null;
   deduplicated?: boolean;
   replaced_observation?: string;
   near_matches?: Array<{ content: string; similarity: number }>;
@@ -72,6 +73,7 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
 
     if (match.content.length >= input.content.length) {
       // Existing is longer or equal — skip (already known)
+      const current = findEntityById(entity.id);
       return {
         success: true,
         entityId: entity.id,
@@ -79,6 +81,7 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
         observationId: match.observation_id,
         relationships_created: [],
         message: `Deduplicated: similar observation already exists for "${entity.name}" (similarity: ${bestMatch.similarity.toFixed(3)})`,
+        version_hash: current?.version_hash,
         deduplicated: true,
       };
     }
@@ -92,6 +95,7 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
     storeEmbedding(entity.id, observation.id, vector, input.content);
 
     const relationshipsCreated = detectAndCreateRelationships(entity, input.content);
+    const updated = findEntityById(entity.id);
 
     return {
       success: true,
@@ -100,6 +104,7 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
       observationId: observation.id,
       relationships_created: relationshipsCreated,
       message: `Replaced shorter duplicate for "${entity.name}" (similarity: ${bestMatch.similarity.toFixed(3)})`,
+      version_hash: updated?.version_hash,
       replaced_observation: replacedContent,
     };
   }
@@ -115,6 +120,8 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
     ? Math.round(computeNovelty(vector, existing.map(e => e.vector)) * 1000) / 1000
     : 1.0;
 
+  const updatedEntity = findEntityById(entity.id);
+
   const result: RememberResult = {
     success: true,
     entityId: entity.id,
@@ -122,6 +129,7 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
     observationId: observation.id,
     relationships_created: relationshipsCreated,
     message: `Remembered: "${input.content.slice(0, 50)}${input.content.length > 50 ? '...' : ''}" for entity "${entity.name}"`,
+    version_hash: updatedEntity?.version_hash,
     novelty,
   };
 

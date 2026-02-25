@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { searchObservations, touchRecalledObservations, type ObservationWithEntity } from '../../db/observations.js';
-import { findEntityByName } from '../../db/entities.js';
+import { findEntityByName, getEntityVersion } from '../../db/entities.js';
 import { getRelatedEntities } from '../../db/relationships.js';
 import { generateEmbedding, semanticSearchWithVector, getEmbeddingsByEntity, semanticSearch, type SemanticSearchResult } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
@@ -34,6 +34,7 @@ interface MemoryResult {
   remembered_at: string;
   similarity?: number;
   stale?: boolean;
+  version_hash?: string | null;
 }
 
 export interface RecallResult {
@@ -177,6 +178,16 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     }
   }
 
+  // Inject version_hash per entity (cached)
+  const versionCache = new Map<string, string | null>();
+  for (const m of memories) {
+    if (!versionCache.has(m.entity)) {
+      const version = getEntityVersion(m.entity);
+      versionCache.set(m.entity, version?.version_hash ?? null);
+    }
+    m.version_hash = versionCache.get(m.entity) ?? null;
+  }
+
   const limited = memories.slice(0, input.limit);
 
   // Track access for recall-frequency analysis
@@ -215,20 +226,21 @@ function formatCompact(memories: MemoryResult[]): string {
   if (memories.length === 0) return '';
 
   // Group by entity
-  const groups = new Map<string, { type: string | null; items: MemoryResult[] }>();
+  const groups = new Map<string, { type: string | null; version_hash: string | null; items: MemoryResult[] }>();
   for (const m of memories) {
     const existing = groups.get(m.entity);
     if (existing) {
       existing.items.push(m);
     } else {
-      groups.set(m.entity, { type: m.type, items: [m] });
+      groups.set(m.entity, { type: m.type, version_hash: m.version_hash ?? null, items: [m] });
     }
   }
 
   const sections: string[] = [];
-  for (const [entity, { type, items }] of groups) {
+  for (const [entity, { type, version_hash, items }] of groups) {
     const typeStr = type ? ` (${type})` : '';
-    const lines = [`**${entity}**${typeStr}`];
+    const hashStr = version_hash ? ` [v:${version_hash.slice(0, 8)}]` : '';
+    const lines = [`**${entity}**${typeStr}${hashStr}`];
     for (const item of items) {
       const simStr = item.similarity !== undefined ? ` [${item.similarity.toFixed(2)}]` : '';
       lines.push(`- ${item.content}${simStr}`);
@@ -242,20 +254,21 @@ function formatCompact(memories: MemoryResult[]): string {
 function formatWire(memories: MemoryResult[]): string {
   if (memories.length === 0) return '';
 
-  const groups = new Map<string, { type: string | null; items: MemoryResult[] }>();
+  const groups = new Map<string, { type: string | null; version_hash: string | null; items: MemoryResult[] }>();
   for (const m of memories) {
     const existing = groups.get(m.entity);
     if (existing) {
       existing.items.push(m);
     } else {
-      groups.set(m.entity, { type: m.type, items: [m] });
+      groups.set(m.entity, { type: m.type, version_hash: m.version_hash ?? null, items: [m] });
     }
   }
 
   const sections: string[] = [];
-  for (const [entity, { type, items }] of groups) {
+  for (const [entity, { type, version_hash, items }] of groups) {
     const typeStr = type ? `|${type}` : '';
-    const lines = [`#E ${entity}${typeStr}`];
+    const hashStr = version_hash ? `|v:${version_hash.slice(0, 8)}` : '';
+    const lines = [`#E ${entity}${typeStr}${hashStr}`];
     for (const item of items) {
       lines.push(`- ${item.content}`);
     }
@@ -270,7 +283,7 @@ function formatIndex(memories: MemoryResult[]): RecallIndexResult {
     return { success: true, count: 0, entity_count: 0, text: '#I 0 results, 0 entities' };
   }
 
-  const entityMap = new Map<string, { type: string | null; obsCount: number; bestSimilarity: number }>();
+  const entityMap = new Map<string, { type: string | null; version_hash: string | null; obsCount: number; bestSimilarity: number }>();
   for (const m of memories) {
     const existing = entityMap.get(m.entity);
     const sim = m.similarity ?? 0;
@@ -278,16 +291,17 @@ function formatIndex(memories: MemoryResult[]): RecallIndexResult {
       existing.obsCount++;
       if (sim > existing.bestSimilarity) existing.bestSimilarity = sim;
     } else {
-      entityMap.set(m.entity, { type: m.type, obsCount: 1, bestSimilarity: sim });
+      entityMap.set(m.entity, { type: m.type, version_hash: m.version_hash ?? null, obsCount: 1, bestSimilarity: sim });
     }
   }
 
   const sorted = [...entityMap.entries()].sort((a, b) => b[1].bestSimilarity - a[1].bestSimilarity);
 
   const lines = [`#I ${memories.length} results, ${sorted.length} entities`];
-  for (const [name, { type, obsCount, bestSimilarity }] of sorted) {
+  for (const [name, { type, version_hash, obsCount, bestSimilarity }] of sorted) {
     const typeStr = type ?? '';
-    lines.push(`${name}|${typeStr}|${obsCount} obs|${bestSimilarity.toFixed(2)}`);
+    const hashStr = version_hash ? `|v:${version_hash.slice(0, 8)}` : '';
+    lines.push(`${name}|${typeStr}|${obsCount} obs|${bestSimilarity.toFixed(2)}${hashStr}`);
   }
 
   return {

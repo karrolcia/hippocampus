@@ -1,5 +1,5 @@
 import { getObservationsByIds, deleteObservation, createObservation } from '../../db/observations.js';
-import { findEntityById } from '../../db/entities.js';
+import { findEntityById, updateEntityTimestamp } from '../../db/entities.js';
 import { generateEmbedding, storeEmbedding, deleteEmbedding } from '../../embeddings/embedder.js';
 
 export interface MergeInput {
@@ -13,6 +13,7 @@ export interface MergeResult {
   merged_count: number;
   entity_name: string;
   message: string;
+  version_hash?: string | null;
 }
 
 export async function merge(input: MergeInput): Promise<MergeResult> {
@@ -51,11 +52,16 @@ export async function merge(input: MergeInput): Promise<MergeResult> {
     deleteObservation(obs.id);
   }
 
+  // Refresh version hash after mutation
+  updateEntityTimestamp(entityId);
+  const updated = findEntityById(entityId);
+
   return {
     success: true,
     new_observation_id: newObservation.id,
     merged_count: observations.length,
     entity_name: entity.name,
     message: `Merged ${observations.length} observations into one for "${entity.name}".`,
+    version_hash: updated?.version_hash,
   };
 }

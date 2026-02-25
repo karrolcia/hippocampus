@@ -152,10 +152,10 @@ describe('Budgeted context', () => {
 // ─── Feature 4: Access Tracking ───
 
 describe('Access tracking', () => {
-  test('schema is version 5', () => {
+  test('schema is version 6', () => {
     const db = getDatabase();
     const version = getSchemaVersion(db);
-    assert.equal(version, 5);
+    assert.equal(version, 6);
   });
 
   test('observations table has recall tracking and importance columns', () => {
