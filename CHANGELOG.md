@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.1 — "Room for the big stuff" (2026-02-26)
+
+The 2,000 character limit made sense when every observation was a telegraphic fact. Then you try to store a writing framework, a CLAUDE.md file, a skill template — and you're negotiating with a text box about what to leave out.
+
+Content limit raised to 50,000 characters. The embedding model still only sees the first ~1,500 chars (all-MiniLM-L6-v2 truncates at 256 tokens), so semantic search quality is unchanged for short memories and irrelevant for long ones — artifacts get retrieved by entity name or keyword, not vibes.
+
+### Changed
+
+- **Content limit: 2,000 → 50,000 chars** across all write paths (`remember`, `update`, `merge`). SQLite TEXT columns had no size constraint to begin with. The limit was purely in Zod validation.
+
+### What this enables
+
+- Writing frameworks, skill templates, career histories, CLAUDE.md files
+- Any artifact you want available across AI tools without copy-pasting
+- Store once in Hippocampus, retrieve from Claude, ChatGPT, Gemini, Cursor, whatever speaks MCP
+
+### What doesn't change
+
+- Semantic search still works on the embedding window (~1,500 chars). Long artifacts rank lower in similarity search — by design, not by bug.
+- Keyword search, `context` tool, and `export` all work on full stored text regardless of length. Always did.
+- SQLite schema untouched. Existing databases need no migration.
+
+
 ## 0.3.0 — "Did anything change while I was gone?" (2026-02-25)
 
 You told Claude about your project stack on Monday. On Wednesday you switched to Gemini. Gemini has the same Hippocampus connected, pulls your context — but is it still Monday's context? Maybe you updated three things since then. Maybe you didn't. Gemini has no way to know without re-fetching everything, every time, forever.
