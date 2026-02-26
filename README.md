@@ -85,7 +85,7 @@ curl http://localhost:3000/health
 Expected response:
 
 ```json
-{"status":"ok","version":"0.3.0"}
+{"status":"ok","version":"0.3.1"}
 ```
 
 **5. Connect Claude Code**
@@ -211,7 +211,7 @@ curl https://hippo.yourdomain.com/health
 Expected response:
 
 ```json
-{"status":"ok","version":"0.3.0"}
+{"status":"ok","version":"0.3.1"}
 ```
 
 If you get a certificate error, DNS might not have propagated yet. Wait a few minutes and retry.
@@ -466,7 +466,7 @@ For systematic first-session extraction, the `onboard` tool returns a structured
 
 - AES-256 database encryption via SQLCipher (text, embeddings, indexes — everything)
 - OAuth 2.1 with PKCE for remote access
-- Input validation: 2,000 char/memory, 200 char/entity name
+- Input validation: 50,000 char/memory, 200 char/entity name
 - Rate limiting on all endpoints
 - `PRAGMA secure_delete = ON` — forgotten memories are zeroed, not just unlinked
 - Non-root Docker, `cap_drop: ALL`, read-only filesystem
