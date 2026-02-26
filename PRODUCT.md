@@ -198,6 +198,9 @@ Core server, 6 tools (remember, recall, forget, update, context, export), SQLCip
 ### 0.2.0 — Memory Lifecycle
 Subspace novelty scoring (SVD), sleep mode (compress/prune/refresh lifecycle analysis), reconsolidation hints on recall, observation kind and importance. The "overnight defrag" for knowledge graphs.
 
+### 0.3.1 — Artifact Storage
+Content limit raised from 2,000 to 50,000 chars. Enables storing writing frameworks, skill templates, CLAUDE.md files — anything you want available across AI tools. Semantic search still uses the embedding window (~1,500 chars); long artifacts are retrieved by entity name, keyword, or context tool.
+
 ### 0.3.0 — Cross-Platform Staleness
 Entity versioning (SHA-256 hash per entity, recomputed on every mutation), `check_version` tool (cached hash in, is_current boolean out), `onboard` tool (guided first-session extraction), version_hash propagated through all tool responses. The "did anything change while I was in ChatGPT?" release.
 
