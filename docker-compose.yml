@@ -38,8 +38,6 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-      - /var/www/karolinasarna.com:/srv/karolinasarna.com:ro
-      - /var/www/rebelstrategylab.com:/srv/rebelstrategylab.com:ro
     depends_on:
       - hippocampus
 
