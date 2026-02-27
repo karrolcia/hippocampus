@@ -39,11 +39,11 @@ after(() => {
 // Schema V6 migration
 // ---------------------------------------------------------------------------
 
-describe('Schema V6 migration', () => {
-  test('schema version is 6', () => {
+describe('Schema V7 migration', () => {
+  test('schema version is 7', () => {
     const db = getDatabase();
     const version = getSchemaVersion(db);
-    assert.equal(version, 6);
+    assert.equal(version, 7);
   });
 
   test('entities table has version_hash and version_at columns', () => {

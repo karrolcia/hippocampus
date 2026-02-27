@@ -2,12 +2,12 @@ import { Hono } from 'hono';
 import { randomUUID, createHash, timingSafeEqual } from 'crypto';
 import type { Context, Next } from 'hono';
 import { config } from '../config.js';
-
-// In-memory stores (single-user, no persistence needed)
-const clients = new Map<string, { client_id: string; redirect_uris: string[]; client_name?: string }>();
-const authCodes = new Map<string, { client_id: string; code_challenge: string; redirect_uri: string; expires_at: number }>();
-const accessTokens = new Map<string, { client_id: string; expires_at: number }>();
-const refreshTokens = new Map<string, { client_id: string; access_token: string; expires_at: number }>();
+import {
+  registerClient, getClient,
+  createAuthCode, getAuthCode, deleteAuthCode,
+  createToken, getToken, deleteToken,
+  deleteExpiredOAuthData,
+} from '../db/oauth.js';
 
 const ACCESS_TOKEN_TTL = 60 * 60 * 1000; // 1 hour
 const REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -54,13 +54,7 @@ export function createOAuthRoutes(): Hono {
       return c.json({ error: 'invalid_client_metadata', error_description: 'redirect_uris required' }, 400);
     }
 
-    const client = {
-      client_id: clientId,
-      redirect_uris: redirectUris,
-      client_name: body.client_name,
-    };
-
-    clients.set(clientId, client);
+    registerClient(clientId, redirectUris, body.client_name);
 
     return c.json({
       client_id: clientId,
@@ -78,7 +72,8 @@ export function createOAuthRoutes(): Hono {
     const codeChallengeMethod = c.req.query('code_challenge_method');
     const state = c.req.query('state');
 
-    if (!clientId || !clients.has(clientId)) {
+    const client = clientId ? getClient(clientId) : undefined;
+    if (!clientId || !client) {
       return c.json({ error: 'invalid_request', error_description: 'Unknown client_id' }, 400);
     }
 
@@ -90,7 +85,6 @@ export function createOAuthRoutes(): Hono {
       return c.json({ error: 'invalid_request', error_description: 'code_challenge and redirect_uri required' }, 400);
     }
 
-    const client = clients.get(clientId)!;
     if (!client.redirect_uris.includes(redirectUri)) {
       return c.json({ error: 'invalid_request', error_description: 'redirect_uri not registered' }, 400);
     }
@@ -139,12 +133,7 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
 
     // Generate auth code
     const code = randomUUID();
-    authCodes.set(code, {
-      client_id: clientId,
-      code_challenge: codeChallenge,
-      redirect_uri: redirectUri,
-      expires_at: Date.now() + AUTH_CODE_TTL,
-    });
+    createAuthCode(code, clientId, codeChallenge, redirectUri, Date.now() + AUTH_CODE_TTL);
 
     const redirect = new URL(redirectUri);
     redirect.searchParams.set('code', code);
@@ -163,7 +152,7 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
       const codeVerifier = body['code_verifier'] as string;
       const redirectUri = body['redirect_uri'] as string;
 
-      const authCode = authCodes.get(code);
+      const authCode = getAuthCode(code);
       if (!authCode) {
         return c.json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
       }
@@ -179,27 +168,19 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
       }
 
       if (Date.now() > authCode.expires_at) {
-        authCodes.delete(code);
+        deleteAuthCode(code);
         return c.json({ error: 'invalid_grant', error_description: 'Authorization code expired' }, 400);
       }
 
       // Single-use: delete auth code
-      authCodes.delete(code);
+      deleteAuthCode(code);
 
       // Issue tokens
       const accessToken = randomUUID();
       const refreshToken = randomUUID();
 
-      accessTokens.set(accessToken, {
-        client_id: authCode.client_id,
-        expires_at: Date.now() + ACCESS_TOKEN_TTL,
-      });
-
-      refreshTokens.set(refreshToken, {
-        client_id: authCode.client_id,
-        access_token: accessToken,
-        expires_at: Date.now() + REFRESH_TOKEN_TTL,
-      });
+      createToken(accessToken, 'access', authCode.client_id, null, Date.now() + ACCESS_TOKEN_TTL);
+      createToken(refreshToken, 'refresh', authCode.client_id, accessToken, Date.now() + REFRESH_TOKEN_TTL);
 
       return c.json({
         access_token: accessToken,
@@ -211,31 +192,23 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
 
     if (grantType === 'refresh_token') {
       const oldRefreshToken = body['refresh_token'] as string;
-      const stored = refreshTokens.get(oldRefreshToken);
+      const stored = getToken(oldRefreshToken, 'refresh');
 
       if (!stored || Date.now() > stored.expires_at) {
-        if (stored) refreshTokens.delete(oldRefreshToken);
+        if (stored) deleteToken(oldRefreshToken);
         return c.json({ error: 'invalid_grant', error_description: 'Invalid or expired refresh token' }, 400);
       }
 
       // Rotation: invalidate old tokens
-      refreshTokens.delete(oldRefreshToken);
-      accessTokens.delete(stored.access_token);
+      deleteToken(oldRefreshToken);
+      if (stored.linked_token) deleteToken(stored.linked_token);
 
       // Issue new tokens
       const newAccessToken = randomUUID();
       const newRefreshToken = randomUUID();
 
-      accessTokens.set(newAccessToken, {
-        client_id: stored.client_id,
-        expires_at: Date.now() + ACCESS_TOKEN_TTL,
-      });
-
-      refreshTokens.set(newRefreshToken, {
-        client_id: stored.client_id,
-        access_token: newAccessToken,
-        expires_at: Date.now() + REFRESH_TOKEN_TTL,
-      });
+      createToken(newAccessToken, 'access', stored.client_id, null, Date.now() + ACCESS_TOKEN_TTL);
+      createToken(newRefreshToken, 'refresh', stored.client_id, newAccessToken, Date.now() + REFRESH_TOKEN_TTL);
 
       return c.json({
         access_token: newAccessToken,
@@ -272,7 +245,7 @@ export function bearerAuth() {
     }
 
     const token = auth.slice(7);
-    const stored = accessTokens.get(token);
+    const stored = getToken(token, 'access');
 
     if (!stored) {
       c.header('WWW-Authenticate', 'Bearer error="invalid_token"');
@@ -280,7 +253,7 @@ export function bearerAuth() {
     }
 
     if (Date.now() > stored.expires_at) {
-      accessTokens.delete(token);
+      deleteToken(token);
       c.header('WWW-Authenticate', 'Bearer error="invalid_token"');
       return c.json({ error: 'invalid_token', error_description: 'Token expired' }, 401);
     }
@@ -291,14 +264,5 @@ export function bearerAuth() {
 
 // Cleanup expired entries periodically
 setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of authCodes) {
-    if (now > v.expires_at) authCodes.delete(k);
-  }
-  for (const [k, v] of accessTokens) {
-    if (now > v.expires_at) accessTokens.delete(k);
-  }
-  for (const [k, v] of refreshTokens) {
-    if (now > v.expires_at) refreshTokens.delete(k);
-  }
+  deleteExpiredOAuthData();
 }, 10 * 60 * 1000);

@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3-multiple-ciphers';
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 const SCHEMA_V1_SQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -74,6 +74,34 @@ ALTER TABLE entities ADD COLUMN version_hash TEXT;
 ALTER TABLE entities ADD COLUMN version_at TEXT;
 `;
 
+const SCHEMA_V7_SQL = `
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  redirect_uris TEXT NOT NULL,
+  client_name TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS oauth_auth_codes (
+  code TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  token TEXT PRIMARY KEY,
+  token_type TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  linked_token TEXT,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expires ON oauth_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oauth_auth_codes_expires ON oauth_auth_codes(expires_at);
+`;
+
 export function initializeSchema(db: Database.Database): void {
   db.exec(SCHEMA_V1_SQL);
 
@@ -106,6 +134,11 @@ export function initializeSchema(db: Database.Database): void {
     // V6: entity version hash for cross-platform staleness detection
     // ALTER TABLE ADD COLUMN is safe — existing rows get NULL (computed on next mutation)
     db.exec(SCHEMA_V6_SQL);
+  }
+
+  if (currentVersion < 7) {
+    // V7: persist OAuth state (clients, auth codes, tokens) to survive container restarts
+    db.exec(SCHEMA_V7_SQL);
   }
 
   if (!versionRow) {
