@@ -22,13 +22,13 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'remember',
-    'Store a memory or piece of information. Use this to save facts, preferences, context, or anything worth remembering about the user or conversation. Prefer telegraphic form over full sentences — "PhD atmospheric physics, TU Delft" not "Karolina has a PhD in atmospheric physics from TU Delft". Drop articles, pronouns, and filler. One fact per memory when possible.',
+    'Store a memory or piece of information. Use this to save facts, preferences, decisions, reasoning, or exploratory thinking. For facts and preferences, use telegraphic form — "PhD atmospheric physics, TU Delft" not "Karolina has a PhD in atmospheric physics from TU Delft". For rationale and exploration, capture the full reasoning — why a decision was made, what tradeoffs were weighed, or half-formed ideas worth preserving.',
     {
       content: z
         .string()
         .min(1)
         .max(50000)
-        .describe('The information to remember (max 50000 chars. Note: semantic search uses first ~1500 chars for matching; longer content is still fully stored and retrievable by entity name, keyword, or context tool). Use compact, telegraphic style. Example: "PhD atmospheric physics, TU Delft" instead of "She has a PhD in atmospheric physics from TU Delft."'),
+        .describe('The information to remember (max 50000 chars. Note: semantic search uses first ~1500 chars for matching; longer content is still fully stored and retrievable by entity name, keyword, or context tool). Telegraphic for facts. Richer for reasoning and exploration.'),
       entity: z
         .string()
         .max(200)
@@ -54,7 +54,7 @@ export function createMcpServer(): McpServer {
         .string()
         .max(50)
         .optional()
-        .describe('Classification: fact, decision, question, preference (or custom). Filterable in recall.'),
+        .describe('Classification: fact, decision, preference, rationale (why a decision was made, tradeoffs weighed), exploration (half-formed ideas, open questions), question, or custom. Filterable in recall.'),
     },
     async (args) => {
       try {
