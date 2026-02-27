@@ -16,6 +16,8 @@ Content limit raised to 50,000 characters. The embedding model still only sees t
 - Any artifact you want available across AI tools without copy-pasting
 - Store once in Hippocampus, retrieve from Claude, ChatGPT, Gemini, Cursor, whatever speaks MCP
 
+- **Richer observation kinds.** `remember` and `onboard` now guide AIs to capture reasoning and exploratory thinking, not just telegraphic facts. Two new kinds: `rationale` (why a decision was made, tradeoffs weighed, options rejected) and `exploration` (half-formed ideas, open questions worth preserving). No schema change — `kind` was always free-text. The difference is in the tool descriptions: AIs now know these kinds exist and have examples to follow.
+
 ### What doesn't change
 
 - Semantic search still works on the embedding window (~1,500 chars). Long artifacts rank lower in similarity search — by design, not by bug.
