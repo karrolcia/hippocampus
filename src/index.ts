@@ -3,13 +3,14 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { config, VERSION } from './config.js';
-import { initDatabase, closeDatabase } from './db/index.js';
+import { initDatabase, closeDatabase, getDatabase } from './db/index.js';
 import { createMcpServer } from './mcp/server.js';
 import { createRateLimiter } from './middleware/rate-limit.js';
 import { createOAuthRoutes, bearerAuth } from './auth/oauth.js';
 import { backfillEmbeddings } from './embeddings/embedder.js';
 
 const app = new Hono();
+const startedAt = Date.now();
 
 // Initialize database
 initDatabase();
@@ -32,7 +33,24 @@ app.use(
 
 // Health check
 app.get('/health', (c) => {
-  return c.json({ status: 'ok', version: VERSION });
+  let dbStatus = 'ok';
+  try {
+    const db = getDatabase();
+    db.prepare('SELECT 1').get();
+  } catch {
+    dbStatus = 'error';
+  }
+
+  const mem = process.memoryUsage();
+  const body = {
+    status: dbStatus === 'ok' ? 'ok' : 'degraded',
+    version: VERSION,
+    uptime: Math.floor((Date.now() - startedAt) / 1000),
+    db: dbStatus,
+    memory_mb: Math.round(mem.rss / 1024 / 1024),
+  };
+
+  return c.json(body, dbStatus === 'ok' ? 200 : 503);
 });
 
 // Mount OAuth routes when configured
@@ -75,6 +93,15 @@ app.all('/mcp', async (c) => {
   const mcpServer = createMcpServer();
   await mcpServer.connect(transport);
   return transport.handleRequest(c.req.raw);
+});
+
+// JSON 404 for unmatched routes — the MCP SDK's OAuth client calls
+// parseErrorResponse(response) on non-OK responses and expects JSON.
+// Hono's default 404 returns an empty body, which makes JSON.parse("")
+// throw "SyntaxError: Unexpected EOF", surfacing as the confusing
+// "Invalid OAuth error response" message in every MCP client.
+app.notFound((c) => {
+  return c.json({ error: 'not_found', error_description: 'Not found' }, 404);
 });
 
 // Graceful shutdown

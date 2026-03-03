@@ -24,6 +24,11 @@ services:
     security_opt:
       - no-new-privileges:true
     read_only: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     tmpfs:
       - /tmp:noexec,nosuid,nodev,size=64M
 
