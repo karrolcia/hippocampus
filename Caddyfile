@@ -19,6 +19,24 @@ memory.yourdomain.com {
     }
 }
 
+# Tended dashboard
+tended.sarna.rocks {
+    reverse_proxy tended:3333
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+}
+
 # Local development (HTTP only)
 :80 {
     reverse_proxy hippocampus:3000

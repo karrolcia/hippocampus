@@ -31,6 +31,8 @@ services:
         max-file: "3"
     tmpfs:
       - /tmp:noexec,nosuid,nodev,size=64M
+    networks:
+      - web
 
   caddy:
     image: caddy:2-alpine
@@ -43,8 +45,12 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-    depends_on:
-      - hippocampus
+    networks:
+      - web
+
+networks:
+  web:
+    external: true
 
 volumes:
   hippo-data:
