@@ -3,8 +3,8 @@ services:
     build: .
     container_name: hippocampus
     restart: unless-stopped
-    expose:
-      - "3000"
+    ports:
+      - "127.0.0.1:3000:3000"
     environment:
       - HIPPO_PASSPHRASE=${HIPPO_PASSPHRASE}
       - HIPPO_DB_PATH=/data/hippocampus.db
@@ -31,28 +31,6 @@ services:
         max-file: "3"
     tmpfs:
       - /tmp:noexec,nosuid,nodev,size=64M
-    networks:
-      - web
-
-  caddy:
-    image: caddy:2-alpine
-    container_name: hippocampus-caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    networks:
-      - web
-
-networks:
-  web:
-    external: true
 
 volumes:
   hippo-data:
-  caddy-data:
-  caddy-config:
