@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { findOrCreateEntity, findEntityById, listEntities, type Entity } from '../../db/entities.js';
-import { createObservation, deleteObservation } from '../../db/observations.js';
+import { createObservation, deleteObservation, getObservationsByEntityAndKind } from '../../db/observations.js';
 import { createRelationship, relationshipExists } from '../../db/relationships.js';
 import { generateEmbedding, storeEmbedding, getEmbeddingsByEntity, deleteEmbedding } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
@@ -25,6 +25,7 @@ export const rememberSchema = z.object({
   source: z.string().max(100).optional(),
   importance: z.number().min(0).max(1).optional(),
   kind: z.string().max(50).optional(),
+  replace_kind: z.boolean().optional(),
 });
 
 export type RememberInput = z.infer<typeof rememberSchema>;
@@ -46,6 +47,37 @@ export interface RememberResult {
 export async function remember(input: RememberInput): Promise<RememberResult> {
   const entityName = input.entity || 'general';
   const entity = findOrCreateEntity(entityName, input.type);
+
+  // Kind-scoped upsert: delete existing observations with the same kind, then insert
+  // Skips dedup entirely — the caller explicitly wants to replace
+  if (input.replace_kind && input.kind) {
+    const existing = getObservationsByEntityAndKind(entity.id, input.kind);
+    const replacedCount = existing.length;
+
+    for (const obs of existing) {
+      deleteEmbedding(obs.id);
+      deleteObservation(obs.id);
+    }
+
+    const vector = await generateEmbedding(input.content);
+    const observation = createObservation(entity.id, input.content, input.source, input.importance ?? 1.0, input.kind);
+    storeEmbedding(entity.id, observation.id, vector, input.content);
+
+    const relationshipsCreated = detectAndCreateRelationships(entity, input.content);
+    const updated = findEntityById(entity.id);
+
+    return {
+      success: true,
+      entityId: entity.id,
+      entityName: entity.name,
+      observationId: observation.id,
+      relationships_created: relationshipsCreated,
+      message: replacedCount > 0
+        ? `Replaced ${replacedCount} existing "${input.kind}" observation(s) for "${entity.name}"`
+        : `Stored "${input.kind}" observation for "${entity.name}"`,
+      version_hash: updated?.version_hash,
+    };
+  }
 
   // Generate embedding first (needed for dedup check before creating observation)
   const vector = await generateEmbedding(input.content);

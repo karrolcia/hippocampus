@@ -55,6 +55,10 @@ export function createMcpServer(): McpServer {
         .max(50)
         .optional()
         .describe('Classification: fact, decision, preference, rationale (why a decision was made, tradeoffs weighed), exploration (half-formed ideas, open questions), question, or custom. Filterable in recall.'),
+      replace_kind: z
+        .boolean()
+        .optional()
+        .describe('When true, atomically replaces any existing observation(s) with the same kind on this entity. Requires kind to be set. Use for state that should have exactly one observation per kind (e.g., agent checkpoints, schedules). Skips dedup — the caller explicitly wants replacement.'),
     },
     async (args) => {
       try {
@@ -65,6 +69,7 @@ export function createMcpServer(): McpServer {
           source: args.source,
           importance: args.importance,
           kind: args.kind,
+          replace_kind: args.replace_kind,
         };
 
         const result = await remember(sanitizedArgs);

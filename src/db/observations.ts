@@ -125,6 +125,15 @@ export function touchRecalledObservations(ids: string[]): void {
   `).run(...ids);
 }
 
+export function getObservationsByEntityAndKind(entityId: string, kind: string): Observation[] {
+  const db = getDatabase();
+  return db.prepare(`
+    SELECT * FROM observations
+    WHERE entity_id = ? AND kind = ?
+    ORDER BY created_at DESC
+  `).all(entityId, kind) as Observation[];
+}
+
 export function deleteObservation(id: string): boolean {
   const db = getDatabase();
   const result = db.prepare('DELETE FROM observations WHERE id = ?').run(id);
