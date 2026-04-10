@@ -15,6 +15,7 @@ services:
       - HIPPO_OAUTH_USER=${HIPPO_OAUTH_USER:-}
       - HIPPO_OAUTH_PASSWORD_HASH=${HIPPO_OAUTH_PASSWORD_HASH:-}
       - HIPPO_TOKEN=${HIPPO_TOKEN:-}
+      - HIPPO_AGENT_TOKEN=${HIPPO_AGENT_TOKEN:-}
     volumes:
       - hippo-data:/data
     cap_drop:
