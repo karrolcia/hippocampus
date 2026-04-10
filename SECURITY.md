@@ -53,6 +53,22 @@ POST /token
 POST /register
 ```
 
+**Agent token (optional, machine-to-machine):**
+Scheduled agents running on the owner's own infrastructure (e.g. a launchd
+job on the owner's laptop hitting their own server) can authenticate with
+a static bearer token set via `HIPPO_AGENT_TOKEN` (min 32 chars, enforced
+at startup).
+
+- Independent from OAuth access tokens — set one, both, or neither
+- `bearerAuth()` checks OAuth first, falls back to the agent token
+- Constant-time comparison (`timingSafeEqual`) with a length gate
+- Revocation: rotate the env var, redeploy
+- Scope: full read/write on the configured instance (same as OAuth in the
+  self-hosted single-user model)
+- OAuth clients are unaffected — they never reach the agent token path
+
+This path is opt-in: if `HIPPO_AGENT_TOKEN` is not set, nothing changes.
+
 ### 3. Encryption at Rest: SQLCipher (AES-256)
 - `better-sqlite3-multiple-ciphers` package
 - Entire database file encrypted: tables, indexes, metadata, WAL, embeddings

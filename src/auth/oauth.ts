@@ -224,10 +224,35 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
   return oauth;
 }
 
-// Bearer token verification middleware
+// Constant-time comparison of candidate token against a configured secret.
+// Returns false if either is missing or lengths differ; always runs a
+// timingSafeEqual on equal-length buffers to avoid length-based leaks
+// once past the length gate.
+function matchesAgentToken(candidate: string): boolean {
+  if (!config.agentToken) return false;
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(config.agentToken);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+// Bearer token verification middleware.
+//
+// Accepts either:
+//  (a) an OAuth 2.1 access token issued by this server (production path,
+//      used by Claude.ai and other MCP clients that run the full flow), or
+//  (b) a static agent bearer token configured via HIPPO_AGENT_TOKEN
+//      (machine-to-machine path for self-hosted scheduled agents on the
+//      owner's own infrastructure — no OAuth dance, constant-time compare).
+//
+// Agent token check runs last so OAuth clients are unaffected. If neither
+// matches, returns 401 with the appropriate WWW-Authenticate header.
+//
+// When OAuth is not configured at all (legacy single-token mode), the
+// original HIPPO_TOKEN path is preserved for backward compat.
 export function bearerAuth() {
   return async (c: Context, next: Next) => {
-    // If OAuth is not configured, check for simple token auth
+    // Legacy mode: no OAuth, check HIPPO_TOKEN only
     if (!config.oauthIssuer) {
       if (config.token) {
         const auth = c.req.header('Authorization');
@@ -245,24 +270,31 @@ export function bearerAuth() {
     }
 
     const token = auth.slice(7);
+
+    // Try OAuth access token first (primary path for MCP clients)
     const stored = getToken(token, 'access');
-
-    if (!stored) {
-      c.header('WWW-Authenticate', 'Bearer error="invalid_token"');
-      return c.json({ error: 'invalid_token', error_description: 'Unknown or expired token' }, 401);
+    if (stored) {
+      if (Date.now() > stored.expires_at) {
+        deleteToken(token);
+        c.header('WWW-Authenticate', 'Bearer error="invalid_token"');
+        return c.json({ error: 'invalid_token', error_description: 'Token expired' }, 401);
+      }
+      return next();
     }
 
-    if (Date.now() > stored.expires_at) {
-      deleteToken(token);
-      c.header('WWW-Authenticate', 'Bearer error="invalid_token"');
-      return c.json({ error: 'invalid_token', error_description: 'Token expired' }, 401);
+    // Fall back to agent token (machine-to-machine path)
+    if (matchesAgentToken(token)) {
+      return next();
     }
 
-    return next();
+    c.header('WWW-Authenticate', 'Bearer error="invalid_token"');
+    return c.json({ error: 'invalid_token', error_description: 'Unknown or expired token' }, 401);
   };
 }
 
-// Cleanup expired entries periodically
-setInterval(() => {
+// Cleanup expired entries periodically. Unref so the interval does not
+// keep the Node event loop alive (tests and scripts can exit cleanly).
+const cleanupInterval = setInterval(() => {
   deleteExpiredOAuthData();
 }, 10 * 60 * 1000);
+cleanupInterval.unref();

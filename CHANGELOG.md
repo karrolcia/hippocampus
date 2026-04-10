@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.1 — "Hey, it's your server calling" (2026-04-10)
+
+OAuth 2.1 is the right front door when Claude.ai and other MCP clients come knocking. It is a terrible choice when your own nightly agent, running on your own laptop, needs to talk to your own server to put together tomorrow's briefing. The refresh-token dance is a failure mode looking for a place to happen — and when it fails, it fails silently at 9am on a Monday, which is exactly when you needed the briefing.
+
+So there is now a second door. Same building, same locks, different key.
+
+### Added
+
+- **`HIPPO_AGENT_TOKEN` env var.** Optional. If set, `bearerAuth()` accepts it as a valid bearer token in addition to OAuth access tokens. Designed for machine-to-machine scheduled agents running on infrastructure you control. Minimum 32 characters enforced in config schema (`Zod.string().min(32)`) — if you are going to bypass OAuth, at least bring a real token.
+- **`auth.test.ts`.** Covers missing header, bogus token, valid agent token, length-gate rejection (different length), same-length-different-content rejection. 5 tests, no DB round-trips in the assertions themselves.
+
+### Changed
+
+- **`bearerAuth()` now tries OAuth access tokens first, then falls back to the agent token.** This ordering is deliberate: existing OAuth clients are completely unaffected (the lookup is the same, the behavior on success is the same). Only tokens that fail the OAuth lookup reach the agent-token check. If neither matches, the response is identical to before.
+- **Constant-time comparison for the agent token.** `timingSafeEqual()` was already imported for OAuth. The new `matchesAgentToken()` helper adds a length gate before the compare (buffers must be equal length for `timingSafeEqual` to work at all) and bails out safely on missing config. No length-based side channels.
+- **Cleanup interval is now `unref()`'d.** The 10-minute `deleteExpiredOAuthData()` interval used to keep the Node event loop alive, which made the test runner hang after tests finished. It no longer does. This is a test-ergonomics fix, but also a correctness improvement for any script that imports `oauth.ts` and expects to exit cleanly.
+
+### Why this exists
+
+Scheduled agents on the owner's own laptop, hitting the owner's own server, over HTTPS, with a constant-time-compared secret stored in the macOS Keychain — that is a different trust model than a third-party AI assistant asking for access to user data. OAuth 2.1 was designed for the second case and it shows. Trying to force the first case through the same flow means teaching your laptop to handle refresh-token rotation at 3am, and discovering at 9am that it did not.
+
+The new path is scoped at the deployment layer, not in the protocol: if `HIPPO_AGENT_TOKEN` is not set, nothing changes. If it is set, one additional code path exists that grants full read/write on the instance that configured it. Revocation is rotate-the-env-var-and-redeploy. The blast radius is exactly as big as the server that configured the token.
+
+OAuth clients do not need to know this path exists. They will never hit it.
+
 ## 0.3.1 — "Room for the big stuff" (2026-02-26)
 
 The 2,000 character limit made sense when every observation was a telegraphic fact. Then you try to store a writing framework, a CLAUDE.md file, a skill template — and you're negotiating with a text box about what to leave out.
