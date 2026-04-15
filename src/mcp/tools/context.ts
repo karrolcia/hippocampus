@@ -12,7 +12,12 @@ interface EntityContext {
   name: string;
   type: string | null;
   version_hash?: string | null;
-  observations: Array<{ content: string; source: string | null; remembered_at: string }>;
+  observations: Array<{
+    content: string;
+    source: string | null;
+    remembered_at: string;
+    kind: string | null;
+  }>;
 }
 
 interface RelationshipInfo {
@@ -106,5 +111,6 @@ function formatObs(obs: Observation) {
     content: obs.content,
     source: obs.source,
     remembered_at: obs.created_at,
+    kind: obs.kind ?? null,
   };
 }
