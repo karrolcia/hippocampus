@@ -1,0 +1,69 @@
+{
+  "_comment": "Bootstrap manifest for scripts/sync-agents.ts. SKILL.md files on disk do not carry cron/requires — this file seeds them on first push. After migration Hippocampus is canonical; this file is a historical artifact. Keys must match the 'name' in each SKILL.md frontmatter. Agents present on disk but missing here get empty cron + enabled:false + requires:[hippocampus].",
+  "version": 1,
+  "agents": {
+    "chief-of-staff-briefing": {
+      "cron": "3 9 * * *",
+      "timezone": "Europe/Helsinki",
+      "enabled": true,
+      "requires": ["hippocampus", "apple-mail", "icloud-calendar", "filesystem:~/Documents/ops/"],
+      "runtime_hint": "launchd:com.karolina.chiefofstaff"
+    },
+    "nightly-session-check": {
+      "cron": "47 21 * * *",
+      "timezone": "Europe/Helsinki",
+      "enabled": true,
+      "requires": ["hippocampus"],
+      "runtime_hint": "launchd:com.karolina.nightlysessioncheck"
+    },
+    "knowledge-harvest": {
+      "cron": "32 20 * * 1-5",
+      "timezone": "Europe/Helsinki",
+      "enabled": true,
+      "requires": ["hippocampus"],
+      "runtime_hint": "launchd:com.karolina.knowledgeharvest"
+    },
+    "signal-scan": {
+      "cron": "17 8 * * 1",
+      "timezone": "Europe/Helsinki",
+      "enabled": false,
+      "requires": ["hippocampus", "web-search"],
+      "runtime_hint": "claude-code-scheduled-task (disabled after launchd migration)"
+    },
+    "holvi-export-reminder": {
+      "cron": "0 10 1 * *",
+      "timezone": "Europe/Helsinki",
+      "enabled": false,
+      "requires": ["hippocampus"],
+      "runtime_hint": "claude-code-scheduled-task (disabled after launchd migration)"
+    },
+    "linkedin-data-export-reminder": {
+      "cron": "0 9 * * 1",
+      "timezone": "Europe/Helsinki",
+      "enabled": false,
+      "requires": ["hippocampus"],
+      "runtime_hint": "claude-code-scheduled-task (disabled); may be obsolete now that the DMA pipeline runs daily"
+    },
+    "knowledge-compile": {
+      "cron": "0 19 1 * *",
+      "timezone": "Europe/Helsinki",
+      "enabled": false,
+      "requires": ["hippocampus"],
+      "runtime_hint": "manual / monthly (never scheduled on launchd)"
+    },
+    "knowledge-synthesis": {
+      "cron": "0 20 * * 0",
+      "timezone": "Europe/Helsinki",
+      "enabled": false,
+      "requires": ["hippocampus"],
+      "runtime_hint": "manual / weekly (never scheduled on launchd)"
+    },
+    "seed-repos-v4": {
+      "cron": "",
+      "timezone": "Europe/Helsinki",
+      "enabled": false,
+      "requires": ["hippocampus", "filesystem:~/GitHub/codesea/", "railway-cli"],
+      "runtime_hint": "ad-hoc; run manually when repo count grows"
+    }
+  }
+}

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`scripts/sync-agents.ts`** — Phase 1 migration tool for the Agent Continuity Layer spec. Pushes `~/.claude/scheduled-tasks/<id>/SKILL.md` files into Hippocampus as `agent:<id>` entities with `instruction` + `schedule` observations, and pulls them back out for Claude Code compat. `push --dry-run`, `pull --dry-run`, and `list` for inspection without side effects. Auth via `HIPPO_AGENT_TOKEN` or macOS Keychain fallback.
+- **`scripts/agents-manifest.json`** — Bootstrap cron/requires data for the 9 existing scheduled tasks, since SKILL.md frontmatter doesn't carry scheduling metadata. After the first push Hippocampus is canonical; the manifest becomes a historical artifact.
+
+### Fixed
+
+- **`context` tool now exposes observation `kind`.** V5 added the field in 2026-02 but `formatObs` dropped it when serializing — so any AI consuming `context` couldn't tell an `instruction` observation from a `schedule` one even when both existed. Surfaced while writing the agent sync tool; fixed at the point it was actually needed. No schema change.
+
 ## 0.4.1 — "Hey, it's your server calling" (2026-04-10)
 
 OAuth 2.1 is the right front door when Claude.ai and other MCP clients come knocking. It is a terrible choice when your own nightly agent, running on your own laptop, needs to talk to your own server to put together tomorrow's briefing. The refresh-token dance is a failure mode looking for a place to happen — and when it fails, it fails silently at 9am on a Monday, which is exactly when you needed the briefing.
