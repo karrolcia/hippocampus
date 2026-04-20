@@ -11,6 +11,11 @@
 
 - **`context` tool now exposes observation `kind`.** V5 added the field in 2026-02 but `formatObs` dropped it when serializing — so any AI consuming `context` couldn't tell an `instruction` observation from a `schedule` one even when both existed. Surfaced while writing the agent sync tool; fixed at the point it was actually needed. No schema change.
 
+### Changed
+
+- **`onboard` tool now scales with DB size.** Previously it fetched all entities (up to 10,000) and ran `getObservationsByEntity` per entity just to produce a count — an O(N) loop with a DB round-trip per iteration, fine at 20 entities, painful at 500. The prompt also dumped every entity name as a comma-separated list, so a mature instance spent ~2K tokens on the existing-entities block alone, crowding out the actual extraction guidance. Now: single SQL `COUNT(*)` for observations, single SQL `GROUP BY` for namespace distribution, top 30 most-recently-updated entities as concrete examples. The AI sees namespace counts (`project:` (23), `skill:` (15), `pattern:` (1)) plus recent names plus a note to `recall` for exact-name duplicate checks when needed. Output shape is unchanged (`existing_entities` still returned, now truncated to the recent slice).
+- **`onboard` prompt now names patterns as a first-class inventory category.** Added "Recurring patterns the user diagnoses across encounters (founder archetypes, sales traps, failure modes)" to the inventory list, `pattern:<name>` to the entity naming convention, `"pattern"` to the type enum, and a worked example. The motivation: pattern recognition only compounds if the patterns themselves are entities — otherwise every similar intro call reconstructs the same diagnosis from scratch. The prompt nudges AIs to capture the archetype alongside the specific instance.
+
 ## 0.4.1 — "Hey, it's your server calling" (2026-04-10)
 
 OAuth 2.1 is the right front door when Claude.ai and other MCP clients come knocking. It is a terrible choice when your own nightly agent, running on your own laptop, needs to talk to your own server to put together tomorrow's briefing. The refresh-token dance is a failure mode looking for a place to happen — and when it fails, it fails silently at 9am on a Monday, which is exactly when you needed the briefing.
