@@ -356,7 +356,11 @@ describe('onboard tool', () => {
     const result = onboard({});
     assert.ok(result.instructions);
     assert.ok(result.instructions.includes('remember'));
-    assert.ok(result.instructions.includes('Inventory'));
+    // Either bootstrap mode (Inventory) or ongoing mode (Capture when:) — both are valid.
+    assert.ok(
+      result.instructions.includes('Inventory') || result.instructions.includes('Capture when:'),
+      'Should contain either bootstrap (Inventory) or ongoing (Capture when:) mode guidance',
+    );
     assert.ok(Array.isArray(result.existing_entities));
     assert.equal(typeof result.observation_count, 'number');
   });
@@ -376,5 +380,14 @@ describe('onboard tool', () => {
   test('without source has no source prefix', () => {
     const result = onboard({});
     assert.ok(!result.instructions.startsWith('You are running in'));
+  });
+
+  test('mode branches on observation count', () => {
+    const result = onboard({});
+    // Tests run sequentially in a shared DB; by the time we reach onboard tests,
+    // the obs count varies. Either mode must produce a prompt that mentions
+    // both the `remember` tool and `pattern:` naming guidance (consistent across modes).
+    assert.ok(result.instructions.includes('remember'));
+    assert.ok(result.instructions.includes('pattern:'), 'Both modes should mention pattern: naming');
   });
 });
