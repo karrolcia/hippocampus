@@ -1,0 +1,12 @@
+#!/bin/sh
+# Pre-commit hook — block commits that fail TypeScript type-checking.
+#
+# Tracked in-repo so it's shared with everyone who clones. Git does not use
+# tracked hook dirs automatically, so activate it once per clone with:
+#
+#   git config core.hooksPath .githooks
+#
+# (core.hooksPath is local repo config, not committed — each clone sets it once.)
+
+echo "pre-commit: running typecheck…"
+npm run --silent typecheck

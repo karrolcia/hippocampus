@@ -1,10 +1,1 @@
-{
-  "hooks": {
-    "PreCommit": [
-      {
-        "command": "npm run typecheck",
-        "description": "TypeScript type-check before committing"
-      }
-    ]
-  }
-}
+{}
