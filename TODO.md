@@ -1,12 +1,12 @@
 # Hippocampus TODO
 
 Running list of open work on the codebase. Not a commitment — a scan surface.
-Last updated: 2026-04-15.
+Last updated: 2026-06-08.
 
 ## Immediately unlocked by today's sync-agents work
 
-- [ ] **Deploy `context` kind fix to hippo.sarna.rocks.** Server change already committed to `src/mcp/tools/context.ts`. Until redeploy, `scripts/sync-agents.ts pull` relies on its content-shape heuristic. After deploy the heuristic is still a safe fallback but the `kind` field path becomes primary.
-- [ ] **Add a test for `context` including `kind`.** `tests/versioning.test.ts` covers context-via-version but nothing asserts on observation `kind` making it through `formatObs`. One-shot test that writes a kinded observation and asserts `ctx.entity.observations[0].kind` is non-null.
+- [x] **Deploy `context` kind fix to hippo.sarna.rocks.** ~~Server change already committed to `src/mcp/tools/context.ts`.~~ Verified live on prod 2026-06-08: the `claude.ai Hippocampus` connector (→ `hippo.sarna.rocks`) returns observation `kind` in `context` responses. The fix (`c46ea72`, committed 2026-04-15) was already picked up by a subsequent redeploy; this item was just never checked off. `scripts/sync-agents.ts pull`'s content-shape heuristic remains a safe fallback, but the `kind` field path is now primary.
+- [x] **Add a test for `context` including `kind`.** Done 2026-06-08 — `tests/versioning.test.ts` now has a `kind in context` block asserting a kinded observation's `kind` survives `formatObs` (regression guard for `c46ea72`).
 - [ ] **Audit other tools for dropped V5+ fields.** `formatObs` dropping `kind` is probably not unique — check `recall` response shapes (compact/wire/index/full), `export` (all formats), and the `hippocampus://context` resource. Schema V3 added `recall_count` + `last_recalled_at`, V4 added `importance`, V5 added `kind`. Any of these could be quietly dropped somewhere.
 - [ ] **Decide fate of `linkedin-data-export-reminder`.** The DMA pipeline (per `project:linkedin-data-pipeline`) runs daily and replaces the manual export loop. `scripts/agents-manifest.json` already marks it `enabled: false` with a runtime hint flagging possible obsolescence. Either keep disabled as a fallback, or delete the entity + disk dir.
 - [ ] **Commit or explain `scripts/health-check.sh`.** Untracked, dated 2026-03-03, monitors the Docker container from outside. It's server-side ops tooling, not agent-continuity work. Either commit with a short comment about how it's invoked (cron? systemd timer? the header claims systemd), or move it to the deployment repo / docs and drop from here.

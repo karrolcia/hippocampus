@@ -348,6 +348,28 @@ describe('version_hash in context', () => {
 });
 
 // ---------------------------------------------------------------------------
+// kind in context — regression guard for c46ea72 (formatObs once dropped kind)
+// ---------------------------------------------------------------------------
+
+describe('kind in context', () => {
+  test('context observations preserve kind through formatObs', async () => {
+    await remember({
+      content: 'Kinded observation that must keep its kind through context formatObs',
+      entity: 'context-kind-test',
+      kind: 'decision',
+    });
+
+    const result = await context({ topic: 'context-kind-test' });
+    assert.equal(result.success, true);
+    assert.ok(result.entity);
+    const obs = result.entity.observations.find(o =>
+      o.content.includes('keep its kind through context formatObs'));
+    assert.ok(obs, 'Should find the kinded observation');
+    assert.equal(obs.kind, 'decision', 'kind should survive formatObs, not be dropped');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // onboard tool
 // ---------------------------------------------------------------------------
 
