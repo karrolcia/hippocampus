@@ -136,6 +136,32 @@ describe('Observation kind', () => {
     assert.ok(obs);
     assert.equal(obs.kind, 'decision');
   });
+
+  test('scoring/access fields survive JSON export (lossless backup)', async () => {
+    await remember({
+      content: 'SQLCipher encrypts the entire DB, embeddings included',
+      entity: 'scoring-test-export',
+      importance: 0.8,
+    });
+
+    const result = exportMemories({ format: 'json', entity: 'scoring-test-export' });
+    assert.equal(result.success, true);
+
+    const parsed = JSON.parse(result.data);
+    const entity = parsed.entities.find(
+      (e: { name: string }) => e.name === 'scoring-test-export'
+    );
+    assert.ok(entity);
+    const obs = entity.observations.find(
+      (o: { content: string }) => o.content.includes('SQLCipher')
+    );
+    assert.ok(obs);
+    // importance is user-authored intent — must round-trip exactly
+    assert.equal(obs.importance, 0.8);
+    // access telemetry — present in the backup (value regenerates through use)
+    assert.equal(typeof obs.recall_count, 'number');
+    assert.ok('last_recalled_at' in obs, 'last_recalled_at key present in export');
+  });
 });
 
 // ---------------------------------------------------------------------------

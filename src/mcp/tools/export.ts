@@ -235,6 +235,12 @@ function formatJson(entitiesData: EntityData[], allRelationships: RelationshipWi
         source: obs.source,
         kind: obs.kind,
         created_at: obs.created_at,
+        // Scoring/access state — included so JSON stays a lossless backup (its stated job).
+        // importance is user-authored intent (manual remember() override), unrecoverable if
+        // dropped; recall_count + last_recalled_at are access telemetry, kept for restore fidelity.
+        importance: obs.importance,
+        recall_count: obs.recall_count,
+        last_recalled_at: obs.last_recalled_at,
       })),
     })),
     relationships: allRelationships.map(rel => ({
