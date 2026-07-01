@@ -4,6 +4,8 @@
 
 Your AI shouldn't forget who you are just because you switched apps.
 
+*Docs: this file = what-it-is + the bet + non-priorities; `ROADMAP.md` = what's next; `DECISIONS.md` = go-forward decisions; `CLAUDE.md` = the how-it's-built design decisions + gotchas.*
+
 ## What It Is
 
 An open-source, self-hosted MCP memory server. One server, every AI platform.
@@ -212,6 +214,24 @@ Nobody else is building this:
 - **CLAUDE.md files** — Claude Code only. Local files on disk.
 - **Mem0** — Local MCP server. Doesn't work across platforms.
 - **Hippocampus** — One server, every AI platform, knowledge graph with semantic search, self-hosted and encrypted. Cross-platform staleness detection so AIs know when their cached context is stale without re-fetching everything.
+
+## What Counts as Success (and when to park)
+
+Open-source and free forever — so success is **not** a paying-user count. It's:
+- **Coverage** — it works across the platforms it claims. The untested ones (ChatGPT Developer Mode, Gemini) are the live gaps that block the "universal memory" claim — see `ROADMAP.md`.
+- **Daily-driver** — it's Karolina's own cross-platform memory layer, used in practice. Dogfood is the tell.
+- **Others self-hosting** — a signal the universal-memory job is felt beyond n=1 (the donation link is a loose proxy, never a target).
+
+**Park, not kill:** it's a working tool she relies on — you don't kill that. But *feature* work parks if adoption stays flat after a real launch push; the core stands regardless.
+
+## What It Is NOT (the non-priorities)
+
+The deliberate below-tablestakes — the choices that keep it focused, private, and self-hostable:
+- **No hosted version / no SaaS.** Self-host only — no customer-data liability, no billing code, no support obligation (see Revenue Model).
+- **No external API dependency.** Local embeddings only (`all-MiniLM-L6-v2`, in-process) — privacy + no key, at the deliberate cost of SOTA embedding quality.
+- **Not per-platform memory.** One server, every platform — the opposite of Claude-only / ChatGPT-only native memory (see Differentiation).
+- **Consolidate ≠ auto-merge.** Hippo *clusters* (embedding math); the AI *merges* (language). It never silently merges your memories.
+- **No observation-level supersession.** Entity-versioning solves staleness without a soft-delete model (which conflicts with `secure_delete`) — see CLAUDE.md.
 
 ## Name
 
