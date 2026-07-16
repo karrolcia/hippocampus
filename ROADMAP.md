@@ -20,6 +20,24 @@
 - **R5 — `kind` in export markdown / obsidian** (cosmetic).
 - **Docs / positioning drift.** (a) The v0.4.0 "Memory is a feature. Continuity is the product." positioning lives only in memory + the launch post — decide whether README/PRODUCT should adopt it. (b) `docs/spec-agent-continuity.md` still reads Phase 1 as planned; it's executed (2026-04-15) — add a dated status line.
 
+## Next — production-memory block (from the 2026-07-16 context-engineering talk; D2)
+
+*The talk's production principles (versioning, concurrency, permissioning, out-of-band curation) map onto primitives Hippo mostly has — these four wire them. Ordered: the first has already cost real data. The ops-side counterpart (the dreaming/curation pass) lives in `~/chief-of-staff/ROADMAP.md` #19, not here.*
+
+- [ ] **Append-safe writes — demote dedup-on-write from replace to flag** [session] — `remember` stops silently replacing near-duplicate content (cosine ≥ 0.85); it stores anyway and returns the near-dup as a warning for out-of-band consolidation. `replace_kind` stays (explicit opt-in replacement).
+  - **Why:** judgment doesn't belong in the write path — dedup-on-write silently destroyed a dated daily-log entry (`reference_hippo_dedup_destroys_dated_logs`). In-band writes should be dumb and safe; merging is `consolidate` + the AI's job.
+  - **Where:** `src/mcp/tools/` remember + the embedder dedup path; `tests/`. Update CLAUDE.md's "Dedup on write" design decision in the same change.
+  - **Assumes:** no caller depends on replace-on-longer behaviour (grep `~/chief-of-staff/` prompts + tool descriptions before building).
+  - **Done:** no code path replaces observation content without `replace_kind`; a near-dup write stores + warns; tests cover both.
+- [ ] **`precondition_hash` on mutations — optimistic concurrency** [session] — optional param on `remember`/`update`/`merge`: if the caller's cached hash ≠ current `version_hash`, reject and return the current hash so the agent re-pulls, re-drafts, retries. V6 already recomputes the hash on every mutation — this is the talk's compare-and-swap for nearly free.
+  - **Where:** mutation tools + `db/entities.ts`; document the re-pull/retry loop in the tool descriptions.
+  - **Done:** a stale-hash write is rejected with the current hash; no-param callers are unaffected (backward compatible).
+- [ ] **Protected entities** [session] — a `protected` flag on entities; `remember`/`update`/`forget`/`merge`/`merge_entities` refuse without an explicit `override: true`. Protect the curated tier (`skill:*`, `feedback:*`) from a misbehaving agent or an injected instruction.
+  - **Why:** every agent token currently has full write to everything, including the curriculum. Cheap single-user version of the talk's permissioning; scoped tokens stay out of scope (see PRODUCT non-priorities — no multi-user SaaS).
+  - **Done:** mutation on a protected entity without override errors with a clear message; flag settable + visible via existing tools.
+- [ ] **Mutation audit log — attribution without content** [session] — append-only log: when / entity / tool / source / hash-after. **Never content** (respects `secure_delete`; full version history stays rejected — D2). Answers "which agent wrote this" and gives rollback *points* when paired with `export`.
+  - **Related:** Later's "session provenance on recall" is the read-side of the same need — the talk promotes both.
+
 ## Later (feature ideas — not scheduled)
 - Session provenance on recall (`source_platform` per observation; schema V8).
 - Consistency metrics (build on `consolidate mode: "contradictions"`).
@@ -27,6 +45,7 @@
 - Timezone handling across runtimes (UTC fallback, unimplemented).
 - Failed-task surfacing (checkpoint `last_status: failed` → next runtime mentions it).
 - Gemini end-to-end verify (when Gemini ships a GA MCP client).
+- README/positioning: speak the production-memory vocabulary [quick] — once the production-memory block ships, name versioning / concurrency / permissioning / out-of-band consolidation explicitly. That vocabulary is becoming the search language for exactly what Hippo is, and the only "enterprisey" answer on offer today is a paid managed API.
 
 ## Housekeeping
 - Decide fate of `linkedin-data-export-reminder` (the DMA pipeline replaced it; keep disabled as a fallback, or delete the entity + dir).
