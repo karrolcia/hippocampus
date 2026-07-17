@@ -10,8 +10,17 @@ let pipelineInstance: any = null;
 
 async function getPipeline() {
   if (!pipelineInstance) {
-    const { pipeline } = await import('@xenova/transformers');
+    const { pipeline } = await import('@huggingface/transformers');
+    // dtype: 'q8' is load-bearing, not a perf tweak. The previous
+    // @xenova/transformers@2 stack defaulted to the *quantized* (q8) model;
+    // @huggingface/transformers defaults to fp32. Stored vectors in the prod DB
+    // were written by the q8 model, and recall compares new query vectors
+    // against them by cosine similarity — so we must keep emitting q8 vectors
+    // (cosine ≈ 1.0 vs the old stack; fp32 would drift to ~0.99 and silently
+    // degrade recall). cache_dir wiring (TRANSFORMERS_CACHE → /data/.models in
+    // Docker) is unchanged.
     pipelineInstance = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+      dtype: 'q8',
       cache_dir: process.env.TRANSFORMERS_CACHE || undefined,
     });
   }

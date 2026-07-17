@@ -11,7 +11,7 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 - `@modelcontextprotocol/sdk` (official MCP TypeScript SDK)
 - Streamable HTTP transport on `/mcp`
 - SQLite via `better-sqlite3-multiple-ciphers` (SQLCipher AES-256 encryption)
-- `@xenova/transformers` for local embeddings (all-MiniLM-L6-v2)
+- `@huggingface/transformers` for local embeddings (all-MiniLM-L6-v2, q8 quantized)
 - OAuth 2.1 with PKCE (self-contained, single user)
 - Docker + Caddy reverse proxy
 

@@ -6,6 +6,13 @@ WORKDIR /app
 # Install build dependencies for better-sqlite3
 RUN apt-get update && apt-get install -y python3 make g++ git && rm -rf /var/lib/apt/lists/*
 
+# onnxruntime-node (pulled in by @huggingface/transformers) special-cases linux/x64:
+# its postinstall auto-downloads the CUDA/TensorRT GPU provider binaries from NuGet
+# during `npm ci`. This VPS is CPU-only — all-MiniLM-L6-v2 runs on the bundled CPU
+# binary — so skip that download. Without this, `npm ci` pulls hundreds of MB and
+# fails outright if the NuGet feed is unreachable. (No-op on non-linux/x64 hosts.)
+ENV ONNXRUNTIME_NODE_INSTALL=skip
+
 COPY package*.json ./
 RUN npm ci
 

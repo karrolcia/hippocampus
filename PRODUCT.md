@@ -63,7 +63,7 @@ MCP (Model Context Protocol) is the open standard every major AI platform has ad
 - **Transport:** Streamable HTTP on `/mcp`
 - **Framework:** Hono (lightweight, works with MCP middleware)
 - **Database:** SQLite via `better-sqlite3-multiple-ciphers` (encrypted with SQLCipher, AES-256)
-- **Embeddings:** Local via `@xenova/transformers` (all-MiniLM-L6-v2, ~80MB, no API key needed)
+- **Embeddings:** Local via `@huggingface/transformers` (all-MiniLM-L6-v2, q8, ~80MB, no API key needed)
 - **Auth:** OAuth 2.1 with PKCE (MCP standard, self-contained for single user)
 
 ### Data Model

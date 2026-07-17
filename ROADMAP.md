@@ -39,7 +39,6 @@
   - **Related:** Later's "session provenance on recall" is the read-side of the same need — the talk promotes both.
 
 ## Later (feature ideas — not scheduled)
-- **Migrate embeddings off `@xenova/transformers` → `@huggingface/transformers`** [session] — removes the `onnxruntime-web@1.14 / onnx-proto / protobufjs` subtree that forced the D4 scoped override (the abandoned `@xenova` line pins onnxruntime-web@1.14, which drags the vulnerable protobufjs). **Deferral reason / risk:** verify the maintained package yields vectors compatible with existing stored embeddings — same all-MiniLM-L6-v2 weights *should* match, but the onnxruntime bump can shift quantization, and a mismatch silently breaks recall against the encrypted prod DB; it's also a native-binding change (Docker rebuild). Ship the override removal with it. **Done:** `@huggingface/transformers` in use, `npm audit` still 0 with no protobufjs override, embeddings byte-compatible with pre-migration vectors (cosine ≈ 1.0 on a sample), 128 tests green.
 - Session provenance on recall (`source_platform` per observation; schema V8).
 - Consistency metrics (build on `consolidate mode: "contradictions"`).
 - Agent-task recall shorthand (revisit once Phase 2 bootstrap is in real use).
