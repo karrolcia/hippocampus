@@ -11,7 +11,9 @@ process.env.HIPPO_DB_PATH = DB_PATH;
 process.env.HIPPO_OAUTH_ISSUER = 'https://test.local';
 process.env.HIPPO_OAUTH_USER = 'test';
 process.env.HIPPO_OAUTH_PASSWORD_HASH = 'unused';
-process.env.HIPPO_AGENT_TOKEN = 'a'.repeat(64); // 64-char test token
+// Comma-separated LIST of two 64-char tokens — exercises the multi-token path
+// (per-box revocable agent tokens). 'a' and 'c' are valid; 'b' stays the reject case.
+process.env.HIPPO_AGENT_TOKEN = `${'a'.repeat(64)},${'c'.repeat(64)}`;
 
 // bearerAuth always calls getToken() first for the OAuth access-token path,
 // which requires the DB to be initialized. We init an empty test DB so the
@@ -94,6 +96,32 @@ describe('bearerAuth with agent token fallback', () => {
 
   test('rejects agent token with same length but different content', async () => {
     const { ctx, getResponse } = makeCtx(`Bearer ${'b'.repeat(64)}`);
+    const middleware = bearerAuth();
+    let nextCalled = false;
+    await middleware(ctx as any, async () => { nextCalled = true; });
+    assert.equal(nextCalled, false);
+    assert.equal(getResponse().status, 401);
+  });
+
+  test('accepts the SECOND token in a comma-separated list (per-box tokens)', async () => {
+    const { ctx } = makeCtx(`Bearer ${'c'.repeat(64)}`);
+    const middleware = bearerAuth();
+    let nextCalled = false;
+    await middleware(ctx as any, async () => { nextCalled = true; });
+    assert.equal(nextCalled, true);
+  });
+
+  test('rejects the whole comma-joined string as a single token', async () => {
+    const { ctx, getResponse } = makeCtx(`Bearer ${'a'.repeat(64)},${'c'.repeat(64)}`);
+    const middleware = bearerAuth();
+    let nextCalled = false;
+    await middleware(ctx as any, async () => { nextCalled = true; });
+    assert.equal(nextCalled, false);
+    assert.equal(getResponse().status, 401);
+  });
+
+  test('rejects a token not in the list', async () => {
+    const { ctx, getResponse } = makeCtx(`Bearer ${'d'.repeat(64)}`);
     const middleware = bearerAuth();
     let nextCalled = false;
     await middleware(ctx as any, async () => { nextCalled = true; });

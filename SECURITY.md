@@ -56,8 +56,11 @@ POST /register
 **Agent token (optional, machine-to-machine):**
 Scheduled agents running on the owner's own infrastructure (e.g. a launchd
 job on the owner's laptop hitting their own server) can authenticate with
-a static bearer token set via `HIPPO_AGENT_TOKEN` (min 32 chars, enforced
-at startup).
+a static bearer token set via `HIPPO_AGENT_TOKEN` (min 32 chars per token).
+`HIPPO_AGENT_TOKEN` may be a comma-separated list, so each agent (laptop,
+server, …) can hold an independently-revocable token; the candidate is
+timing-safe-compared against each entry. Keep the list SERVER-side only —
+clients hold a single token, never the whole list.
 
 - Independent from OAuth access tokens — set one, both, or neither
 - `bearerAuth()` checks OAuth first, falls back to the agent token

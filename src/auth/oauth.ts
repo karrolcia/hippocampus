@@ -230,10 +230,20 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
 // once past the length gate.
 function matchesAgentToken(candidate: string): boolean {
   if (!config.agentToken) return false;
+  // HIPPO_AGENT_TOKEN may be a comma-separated LIST, so multiple self-hosted
+  // agents (e.g. the loops box + the Mac) can each hold an independently-
+  // revocable token: revoke one by removing its entry + redeploying, without
+  // rotating the others. A single token (no comma) is the one-element case, so
+  // this is backward-compatible. Each entry is compared in constant time;
+  // entries below the 32-char floor are ignored (never match).
   const a = Buffer.from(candidate);
-  const b = Buffer.from(config.agentToken);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+  for (const raw of config.agentToken.split(',')) {
+    const tok = raw.trim();
+    if (tok.length < 32) continue;
+    const b = Buffer.from(tok);
+    if (a.length === b.length && timingSafeEqual(a, b)) return true;
+  }
+  return false;
 }
 
 // Bearer token verification middleware.
