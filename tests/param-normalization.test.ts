@@ -97,10 +97,20 @@ describe('normalizeParams — unit', () => {
     );
   });
 
-  test('unknown keys pass through (server rejects, not us)', () => {
+  test('unknown keys pass through on non-strict tools (server rejects, not us)', () => {
     assert.deepEqual(
-      normalizeParams('forget', { not_a_real_param: 'x' }),
-      { not_a_real_param: 'x' }
+      normalizeParams('recall', { query: 'q', not_a_real_param: 'x' }),
+      { query: 'q', not_a_real_param: 'x' }
+    );
+  });
+
+  test('unknown keys on forget throw — destructive scope must never silently widen', () => {
+    // Zod strips unknown keys rather than rejecting them, so a stripped arg
+    // on forget can turn a scoped delete into a whole-entity delete
+    // (the 2026-07-27 skill:pseo-llm-visibility incident).
+    assert.throws(
+      () => normalizeParams('forget', { entity: 'x', not_a_real_param: 'x' }),
+      /forget: unrecognized argument "not_a_real_param"/
     );
   });
 
@@ -220,6 +230,38 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
     assert.equal(parsed.success, true);
   });
 
+  test('forget with entity + content deletes one observation through the full wire path', async () => {
+    // Pins the Zod link of the 2026-07-27 bug: `content` must survive schema
+    // validation and reach the handler. If it were ever dropped from the
+    // forget shape again, Zod would strip it and this call would widen to a
+    // whole-entity delete — normalizeParams can't catch that (content is a
+    // known param), only this dispatch-path test can.
+    const server = createMcpServer();
+    await callTool(server, 'remember', {
+      content: 'the observation that stays about winter cycling in Helsinki',
+      entity: 'paramnorm-scoped-forget',
+    });
+    await callTool(server, 'remember', {
+      content: 'the observation that goes about espresso grind settings',
+      entity: 'paramnorm-scoped-forget',
+    });
+    const result = await callTool(server, 'forget', {
+      entity: 'paramnorm-scoped-forget',
+      content: 'the observation that goes about espresso grind settings',
+    });
+    assert.equal(result.isError, false, `scoped forget should not error: ${result.text}`);
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.deleted.entity, false, 'entity must survive a content-scoped forget');
+    assert.equal(parsed.deleted.observations, 1);
+
+    // The surviving observation is still there
+    const ctx = await callTool(server, 'context', { topic: 'paramnorm-scoped-forget' });
+    assert.equal(ctx.isError, false);
+    assert.ok(ctx.text.includes('winter cycling'), 'surviving observation should remain');
+    assert.ok(!ctx.text.includes('espresso grind'), 'deleted observation should be gone');
+  });
+
   test('update with oldContent / newContent (camelCase) succeeds', async () => {
     const server = createMcpServer();
     await callTool(server, 'remember', {
@@ -260,15 +302,15 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
     assert.equal(parsed.success, true);
   });
 
-  test('unknown param name still gets rejected by Zod (we only normalize, never invent)', async () => {
+  test('unknown param on forget surfaces as a loud error through server dispatch', async () => {
     const server = createMcpServer();
-    const result = await callTool(server, 'forget', { not_a_real_param: 'x' });
-    // Either Zod rejects (validation error) or forget returns success:false
-    // (because no entity/observation_id was provided). Both are correct —
-    // we should NOT silently coerce an unknown param into a valid one.
-    if (!result.isError) {
-      const parsed = JSON.parse(result.text);
-      assert.equal(parsed.success, false, 'forget with no recognized params should not succeed');
-    }
+    // The strict-tool throw happens inside the wrapped handler; through the
+    // real SDK dispatch it becomes a JSON-RPC error (Promise.resolve() chain
+    // captures synchronous throws). Here we drive the handler directly, so
+    // the throw reaches us as a rejection — either way, never a silent strip.
+    await assert.rejects(
+      () => callTool(server, 'forget', { entity: 'x', not_a_real_param: 'x' }),
+      /forget: unrecognized argument "not_a_real_param"/
+    );
   });
 });

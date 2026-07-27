@@ -20,8 +20,8 @@
 const TOOL_PARAMS: Record<string, Set<string>> = {
   remember: new Set(['content', 'entity', 'type', 'source', 'importance', 'kind', 'replace_kind']),
   recall: new Set(['query', 'limit', 'type', 'since', 'kind', 'spread', 'format']),
-  forget: new Set(['entity', 'observation_id']),
-  update: new Set(['entity', 'old_content', 'new_content']),
+  forget: new Set(['entity', 'observation_id', 'content']),
+  update: new Set(['entity', 'old_content', 'new_content', 'kind']),
   context: new Set(['topic', 'depth']),
   merge: new Set(['observation_ids', 'content']),
   merge_entities: new Set(['source_entities', 'target_entity', 'target_type']),
@@ -40,6 +40,13 @@ const SEMANTIC_ALIASES: Record<string, Record<string, string>> = {
   forget: { entity_name: 'entity', entityName: 'entity' },
   context: { entity: 'topic', entity_name: 'topic', entityName: 'topic' },
 };
+
+// Destructive tools where a silently-dropped argument can WIDEN the blast
+// radius: Zod strips unknown keys, so `forget({entity, contnet})` would fall
+// through to a whole-entity delete. For these tools an unrecognized argument
+// is a hard error, never a shrug. Error names the key only — never its value
+// (observation content must not leak into logs or error responses).
+const STRICT_TOOLS = new Set(['forget']);
 
 function toSnake(s: string): string {
   return s.replace(/(?<!^)([A-Z])/g, '_$1').toLowerCase();
@@ -68,8 +75,17 @@ export function normalizeParams(toolName: string, args: unknown): unknown {
         out[snake] = v;
       } else if (canonical.has(camel)) {
         out[camel] = v;
+      } else if (STRICT_TOOLS.has(toolName)) {
+        // Truncate the key: a malformed call could put content-like text in
+        // the key position, and this error echoes into client logs.
+        const keyLabel = k.length > 50 ? `${k.slice(0, 50)}…` : k;
+        throw new Error(
+          `${toolName}: unrecognized argument "${keyLabel}". Refusing to proceed — ` +
+            `dropping it could change what gets deleted. ` +
+            `Accepted arguments: ${[...canonical].join(', ')}.`
+        );
       } else {
-        out[k] = v; // unknown key — pass through and let Zod reject
+        out[k] = v; // unknown key — pass through, Zod strips it
       }
     }
   }

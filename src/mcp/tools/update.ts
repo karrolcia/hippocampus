@@ -6,12 +6,14 @@ export interface UpdateInput {
   entity: string;
   old_content: string;
   new_content: string;
+  kind?: string;
 }
 
 export interface UpdateResult {
   success: boolean;
   message: string;
   observationId?: string;
+  kind?: string | null;
   version_hash?: string | null;
 }
 
@@ -34,8 +36,16 @@ export async function update(input: UpdateInput): Promise<UpdateResult> {
     };
   }
 
-  // Create new observation + embedding
-  const newObs = createObservation(entity.id, input.new_content, target.source ?? undefined);
+  // Create new observation + embedding. Carry over the old observation's
+  // metadata — `kind` and `importance` survive the replacement unless the
+  // caller explicitly sets a new kind.
+  const newObs = createObservation(
+    entity.id,
+    input.new_content,
+    target.source ?? undefined,
+    target.importance,
+    input.kind ?? target.kind ?? undefined
+  );
   const vector = await generateEmbedding(input.new_content);
   storeEmbedding(entity.id, newObs.id, vector, input.new_content);
 
@@ -51,6 +61,7 @@ export async function update(input: UpdateInput): Promise<UpdateResult> {
     success: true,
     message: `Updated observation for entity "${input.entity}".`,
     observationId: newObs.id,
+    kind: newObs.kind,
     version_hash: updated?.version_hash,
   };
 }

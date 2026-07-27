@@ -169,23 +169,32 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'forget',
-    'Delete a specific memory or an entire entity and all its associated data. Use with care — this is permanent.',
+    'Delete a specific memory or an entire entity and all its associated data. Use with care — this is permanent. Scopes: observation_id deletes one observation; entity + content deletes the single observation matching that exact content; entity alone deletes the WHOLE entity.',
     {
       entity: z
         .string()
         .max(200)
         .optional()
-        .describe('Entity name to delete entirely (all observations, embeddings, relationships)'),
+        .describe('Entity name. Alone: delete the entity entirely (all observations, embeddings, relationships). With content: only scopes the content match.'),
       observation_id: z
         .string()
         .optional()
-        .describe('Specific observation ID to delete'),
+        .describe('Specific observation ID to delete (takes precedence over content)'),
+      content: z
+        .string()
+        .min(1)
+        .max(50000)
+        .optional()
+        .describe('Exact content of a single observation to delete (requires entity). Deletes only that observation, never the entity.'),
     },
     async (args) => {
       try {
+        // Strip control chars like remember/update do at write — stored
+        // content is sanitized, so an unsanitized needle can never match.
         const result = await forget({
-          entity: args.entity,
+          entity: args.entity?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
           observation_id: args.observation_id,
+          content: args.content?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
         });
         return {
           content: [
@@ -211,7 +220,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'update',
-    'Replace an existing observation with new content. Finds the old observation by exact content match and replaces it.',
+    'Replace an existing observation with new content. Finds the old observation by exact content match and replaces it. The old observation\'s kind and importance carry over unless kind is set explicitly.',
     {
       entity: z
         .string()
@@ -228,13 +237,22 @@ export function createMcpServer(): McpServer {
         .min(1)
         .max(50000)
         .describe('New content to replace with'),
+      kind: z
+        .string()
+        .min(1)
+        .max(50)
+        .optional()
+        .describe('Set the observation kind (e.g., "fact", "decision"). Omit to keep the old observation\'s kind.'),
     },
     async (args) => {
       try {
         const sanitized = {
           entity: args.entity.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
-          old_content: args.old_content,
+          // Sanitize the needle too — stored content is control-char-stripped
+          // at write, so a raw needle with control chars can never match.
+          old_content: args.old_content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
           new_content: args.new_content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
+          kind: args.kind?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
         };
         const result = await update(sanitized);
         return {
