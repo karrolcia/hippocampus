@@ -6,7 +6,7 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 "Your AI shouldn't forget who you are just because you switched apps."
 
 ## Stack
-- Node.js 18+ / TypeScript
+- Node.js 20+ / TypeScript
 - Hono (web framework)
 - `@modelcontextprotocol/sdk` (official MCP TypeScript SDK)
 - Streamable HTTP transport on `/mcp`

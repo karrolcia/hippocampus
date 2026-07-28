@@ -37,7 +37,7 @@ Data model: knowledge graph with entities, observations, and relationships. Sema
 
 ## Try it in 5 minutes
 
-You need Node.js 18+ installed.
+You need Node.js 20+ installed.
 
 **1. Clone and install**
 

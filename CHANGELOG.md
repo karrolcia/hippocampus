@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-### Added
+### Security
+
+- **Cleared all six Dependabot alerts (3 high / 2 moderate / 1 low) in one lockfile sweep.** None were reachable in how this server actually runs — the sharp/libvips CVEs live in image decoding paths a text-embedding server never calls, the adm-zip 4GB-allocation bug sits in onnxruntime's GPU-binary extractor that the Docker build explicitly skips, and the `@hono/node-server` path traversal needs `serveStatic` *and* Windows, neither of which is present — but "unreachable" and "unpatched" make poor roommates. `@hono/node-server` bumped `^1.19.14` → `^2.0.5` (major: drops Node 18, removes the Vercel adapter; `serve()` unchanged), with overrides pinning `sharp ^0.35.0` and `adm-zip ^0.6.0` past their parents' stale ranges; `fast-uri` 3.1.4 and `body-parser` 2.3.0 came along in-range. `engines.node` is now honest about the new floor: `>=20.0.0`. `npm audit`: 0.
 
 - **`HIPPO_AGENT_TOKEN` accepts a comma-separated LIST of agent tokens.** Multiple self-hosted agents (e.g. a laptop + a server) can each hold an independently-revocable token — revoke one by removing its entry and redeploying, without rotating the others. `matchesAgentToken` timing-safe-compares the candidate against each entry and enforces the 32-char floor **per token** (stronger than before, which only checked the whole value). A single token (no comma) behaves unchanged. NB: this is a SERVER-side list — clients (`sync-agents.ts`, the Mac Keychain) still hold a single token; never place the comma-list in a client's `HIPPO_AGENT_TOKEN`.
 - **`scripts/sync-agents.ts`** — Phase 1 migration tool for the Agent Continuity Layer spec. Pushes `~/.claude/scheduled-tasks/<id>/SKILL.md` files into Hippocampus as `agent:<id>` entities with `instruction` + `schedule` observations, and pulls them back out for Claude Code compat. `push --dry-run`, `pull --dry-run`, and `list` for inspection without side effects. Auth via `HIPPO_AGENT_TOKEN` or macOS Keychain fallback.
