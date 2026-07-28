@@ -39,7 +39,8 @@ export function createRateLimiter(maxRequests: number) {
   };
 }
 
-// Cleanup old entries every 5 minutes
+// Cleanup old entries every 5 minutes. unref() so the timer never keeps the
+// process alive on its own (it was hanging node:test workers that import app).
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of windows) {
@@ -47,4 +48,4 @@ setInterval(() => {
       windows.delete(key);
     }
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();

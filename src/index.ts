@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -10,7 +11,9 @@ import { createRateLimiter } from './middleware/rate-limit.js';
 import { createOAuthRoutes, bearerAuth } from './auth/oauth.js';
 import { backfillEmbeddings } from './embeddings/embedder.js';
 
-const app = new Hono();
+// Exported for tests (driven via app.request()); the server itself only
+// starts when this file is the entrypoint — see the main-module block below.
+export const app = new Hono();
 const startedAt = Date.now();
 
 // MCP sessions accumulate one retained McpServer each unless idle ones are
@@ -24,9 +27,6 @@ const sessions = new SessionRegistry<WebStandardStreamableHTTPServerTransport>({
   idleMs: SESSION_IDLE_MS,
   maxSessions: MAX_SESSIONS,
 });
-
-// Initialize database
-initDatabase();
 
 // CORS for AI platform origins
 app.use(
@@ -144,30 +144,41 @@ app.notFound((c) => {
   return c.json({ error: 'not_found', error_description: 'Not found' }, 404);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('Shutting down...');
-  closeDatabase();
-  process.exit(0);
-});
+// Startup side effects (DB init, signal handlers, listener, backfill) only run
+// when this file is the entrypoint — `node dist/index.js` in Docker, `tsx watch
+// src/index.ts` in dev. Tests import { app } without starting a server.
+const isMain =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
 
-process.on('SIGINT', () => {
-  console.log('Shutting down...');
-  closeDatabase();
-  process.exit(0);
-});
+if (isMain) {
+  initDatabase();
 
-// Start server
-console.log(`Hippocampus starting on http://${config.host}:${config.port}`);
-console.log(`MCP endpoint: http://${config.host}:${config.port}/mcp`);
+  // Graceful shutdown
+  process.on('SIGTERM', () => {
+    console.log('Shutting down...');
+    closeDatabase();
+    process.exit(0);
+  });
 
-serve({
-  fetch: app.fetch,
-  port: config.port,
-  hostname: config.host,
-});
+  process.on('SIGINT', () => {
+    console.log('Shutting down...');
+    closeDatabase();
+    process.exit(0);
+  });
 
-// Backfill embeddings for any observations from v1 that lack them
-backfillEmbeddings().catch((err) => {
-  console.error('Embedding backfill failed:', err instanceof Error ? err.message : err);
-});
+  // Start server
+  console.log(`Hippocampus starting on http://${config.host}:${config.port}`);
+  console.log(`MCP endpoint: http://${config.host}:${config.port}/mcp`);
+
+  serve({
+    fetch: app.fetch,
+    port: config.port,
+    hostname: config.host,
+  });
+
+  // Backfill embeddings for any observations from v1 that lack them
+  backfillEmbeddings().catch((err) => {
+    console.error('Embedding backfill failed:', err instanceof Error ? err.message : err);
+  });
+}
