@@ -51,3 +51,7 @@
 - Decide fate of `linkedin-data-export-reminder` (the DMA pipeline replaced it; keep disabled as a fallback, or delete the entity + dir).
 - Commit or explain `scripts/health-check.sh` (untracked ops tooling — commit with an invocation note, or move to the deploy repo).
 - Move `test-all-tools.ts` + `test-export.ts` out of repo root into `tests/` / `scripts/`.
+
+## Watch list from 2026-07-28 session (stale-session regression test + app export refactor, `1ceb9d0`)
+- [ ] **Verify the stale-session 404 fix behaviorally on prod** after the dependabot session's VPS deploy of `0a2bb2e`: POST `https://hippo.sarna.rocks/mcp` with a valid bearer token + bogus `Mcp-Session-Id` → expect HTTP 404 with `error.code -32001` (repro line in CLAUDE.md gotcha). Also confirm `/health` reports `sessions` and version 0.4.1 uptime reset.
+- [ ] **Assumption to hold loosely:** test-file env isolation relies on node's test runner spawning one process per file (`tsx --test`). `tests/auth.test.ts` sets `HIPPO_OAUTH_ISSUER`, `tests/mcp-session.test.ts` deliberately doesn't — if a future runner change shares a process, config module caching would cross-contaminate them. Cheapest check if suites start failing weirdly together: run each file solo with `npx tsx --test tests/<file>`.
