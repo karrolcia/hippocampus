@@ -102,6 +102,15 @@ app.all('/mcp', async (c) => {
         sessions.setInFlight(sessionId, -1);
       }
     }
+    // Unknown or evicted session id: the MCP Streamable HTTP spec requires
+    // 404 here — that's the signal clients re-initialize on. Falling through
+    // to a fresh transport instead yields 400 "Server not initialized",
+    // which clients treat as fatal, so every idle-swept or restart-orphaned
+    // session stayed permanently broken.
+    return c.json(
+      { jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null },
+      404
+    );
   }
 
   // New session (or initialization): create a transport + server.
