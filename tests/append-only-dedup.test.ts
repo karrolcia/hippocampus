@@ -32,8 +32,10 @@ delete process.env.HIPPO_APPEND_ONLY_PREFIXES; // exercise the shipped defaults
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/db/index.js');
 const { remember, isAppendOnlyEntity, DEDUP_THRESHOLD } = await import('../src/mcp/tools/remember.js');
 const { update } = await import('../src/mcp/tools/update.js');
+const { onboard } = await import('../src/mcp/tools/onboard.js');
 const { findEntityByName } = await import('../src/db/entities.js');
-const { getObservationsByEntity } = await import('../src/db/observations.js');
+const { getObservationsByEntity, createObservation } = await import('../src/db/observations.js');
+const { findOrCreateEntity } = await import('../src/db/entities.js');
 const { generateEmbedding } = await import('../src/embeddings/embedder.js');
 const { cosineSimilarity } = await import('../src/embeddings/similarity.js');
 
@@ -219,6 +221,25 @@ describe('append-only entities are exempt from dedup', () => {
     assert.equal(observationsFor(entity).length, 2);
   });
 
+  test('the onboard prompt carries the do-not-consolidate exception', () => {
+    // Third leg of the fix: the server can refuse to delete and can decline to
+    // hand over a usable key, but onboard's step 4 is the standing instruction
+    // that made "high overlap" mean "update or merge" in the first place.
+    // Only the ongoing-mode prompt (50+ observations) has that step — bootstrap
+    // mode never mentions near_matches, update or merge, so it needs no
+    // exception. Pad the store past the threshold to reach the right branch;
+    // these go in without embeddings because onboard only counts rows.
+    const filler = findOrCreateEntity('project:onboard-mode-filler');
+    while (onboard({}).observation_count < 50) {
+      createObservation(filler.id, `filler observation ${Math.random()}`);
+    }
+
+    const prompt = onboard({}).instructions;
+    assert.match(prompt, /established Hippocampus memory store/, 'must be the ongoing-mode prompt');
+    assert.match(prompt, /append_only/);
+    assert.match(prompt, /Never `update`, `merge` or otherwise consolidate/);
+  });
+
   test('isAppendOnlyEntity matches configured prefixes, case-insensitively', () => {
     assert.equal(isAppendOnlyEntity('ops:daily-log:hippocampus'), true);
     assert.equal(isAppendOnlyEntity('ops:session-check'), true);
@@ -262,6 +283,21 @@ describe('dedup is scoped to the same UTC calendar day', () => {
     assert.match(second.message, /consider consolidating/);
   });
 
+  test('an unreadable created_at is treated as a different day, not the same one', async () => {
+    // Defensive, and the direction matters: a NULL/garbage timestamp must fall
+    // OUT of the dedup window (store a duplicate) rather than into it (delete).
+    const first = await remember({ entity: 'project:null-timestamp', content: HARVEST_JULY });
+    getDatabase()
+      .prepare('UPDATE observations SET created_at = NULL WHERE id = ?')
+      .run(first.observationId);
+
+    const second = await remember({ entity: 'project:null-timestamp', content: HARVEST_AUGUST });
+
+    assert.equal(second.replaced, false);
+    assert.equal(second.deduplicated, undefined);
+    assert.equal(observationsFor('project:null-timestamp').length, 2);
+  });
+
   test('yesterday counts as a different day', async () => {
     const first = await remember({ entity: 'project:yesterday-log', content: HARVEST_JULY });
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -297,6 +333,13 @@ describe('same-day dedup still works, and announces deletion', () => {
     assert.equal(second.replaced, false, 'a skip destroys nothing');
     assert.equal(second.replaced_observation, undefined);
     assert.equal(observationsFor('user:dedup-skip').length, 1);
+
+    // A skip still loses the new write, so any other overlap stays visible.
+    const third = await remember({
+      entity: 'user:dedup-skip',
+      content: 'Karolina lives in Helsinki, has a PhD in atmospheric physics and cycles year round',
+    });
+    assert.ok(third.near_matches && third.near_matches.length > 0);
   });
 
   test('replace_kind reports its deletions too', async () => {
