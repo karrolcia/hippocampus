@@ -102,7 +102,8 @@ remember(content, entity?, type?, source?, importance?, kind?)
 recall(query, limit?, type?, since?, kind?, spread?, format?)
   → Semantic + keyword search. 4 formats (full/compact/wire/index).
     Spreading activation follows relationships 1 hop. Reconsolidation
-    hints flag stale observations. Includes version_hash per entity.
+    hints flag stale observations (never on append-only entities).
+    Includes version_hash per entity.
 
 forget(entity?, observation_id?)
   → Permanent deletion. PRAGMA secure_delete = ON — zeros freed pages.
