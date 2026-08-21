@@ -446,6 +446,8 @@ Returns `information_rank` and `redundancy_ratio` per entity for structural diag
 
 When `recall` returns observations older than 30 days on an entity that has received newer information since, they're flagged `stale: true`. Lightweight date comparison on every retrieval — no embedding computation. The AI sees the flag and can decide whether to update or leave the observation as-is.
 
+Append-only entities are never flagged. "The entity has newer information since" is simply what an active log looks like, so the condition matched every historical entry — and since the flag's suggested remedy is `update`, which replaces an observation, the one place it fired hardest was the one place it must never fire.
+
 ### Cross-platform staleness detection
 
 You told Claude about your project stack on Monday. On Wednesday you switched to Gemini. Is Gemini's cached context still current? Every entity carries a `version_hash` — SHA-256 of its observation content. The AI caches this hash, and later calls `check_version` to ask "did anything change?" without re-fetching everything. One lightweight metadata call instead of re-reading the entire entity.

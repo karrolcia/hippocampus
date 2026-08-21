@@ -4,6 +4,7 @@ import { findEntityByName, getEntityVersion } from '../../db/entities.js';
 import { getRelatedEntities } from '../../db/relationships.js';
 import { generateEmbedding, semanticSearchWithVector, getEmbeddingsByEntity, semanticSearch, type SemanticSearchResult } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
+import { isAppendOnlyEntity } from '../../config.js';
 
 export const recallSchema = z.object({
   query: z
@@ -161,6 +162,15 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
   const entityUpdateCache = new Map<string, string>(); // entity name → updated_at
 
   for (const m of memories) {
+    // Append-only entities are never stale (D12). The flag means "this may need
+    // updating", and `update` is create-new + delete-old — so on a log entity it
+    // invites destroying a dated record. Worse, it fires on ALL of them: the
+    // condition is "older than 30 days AND the entity has newer information
+    // since", and an active log always has newer information since. Measured on
+    // prod before the fix: 5 of 5 recalled log observations flagged stale. An old
+    // log entry is not out of date; it is the entry for that date.
+    if (isAppendOnlyEntity(m.entity)) continue;
+
     const createdAt = new Date(m.remembered_at).getTime();
     const ageDays = (now - createdAt) / (1000 * 60 * 60 * 24);
     if (ageDays <= STALE_AGE_DAYS) continue;

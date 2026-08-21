@@ -258,9 +258,11 @@ describe('Reconsolidation hints', () => {
     const oldMemory = result.memories.find(
       (m: any) => m.observation_id === old.observationId
     );
-    if (oldMemory) {
-      assert.equal(oldMemory.stale, true, 'Old observation on updated entity should be stale');
-    }
+    // Asserted unconditionally: an `if (oldMemory)` guard here passes vacuously
+    // whenever recall doesn't return the observation, which is the case this test
+    // exists to detect. It is also the CONTROL for the append-only case below.
+    assert.ok(oldMemory, 'recall must return the backdated observation');
+    assert.equal(oldMemory.stale, true, 'Old observation on updated entity should be stale');
     // The new observation should NOT be stale
     const newMemory = result.memories.find(
       (m: any) => m.content.includes('React 19')
@@ -268,6 +270,42 @@ describe('Reconsolidation hints', () => {
     if (newMemory) {
       assert.ok(!newMemory.stale, 'Recent observation should not be stale');
     }
+  });
+
+  test('append-only entities are never flagged stale', async () => {
+    // The flag means "this may need updating", and `update` is create-new +
+    // delete-old — so on a log entity it invites destroying a dated record. And
+    // it fired on every one of them: "older than 30 days AND the entity has newer
+    // information since" is a description of every historical entry in an active
+    // log. Measured on prod before the fix: 5 of 5 recalled log observations
+    // flagged stale. The test above is the control — identical shape, ordinary
+    // entity, still stale.
+    const old = await remember({
+      content: '2026-06-01 nightly check. All contexts wrote daily logs; no gaps in coverage.',
+      entity: 'ops:daily-log:stale-probe',
+    });
+
+    const db = getDatabase();
+    const oldDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare('UPDATE observations SET created_at = ? WHERE id = ?').run(oldDate, old.observationId);
+    db.prepare('UPDATE embeddings SET created_at = ? WHERE observation_id = ?').run(oldDate, old.observationId);
+
+    // A newer entry on the same entity — which is simply what an active log is,
+    // and is exactly what the staleness condition keys off.
+    await remember({
+      content: '2026-08-21 nightly check. Two contexts missing entries; coverage incomplete.',
+      entity: 'ops:daily-log:stale-probe',
+    });
+
+    const result = await recall({ query: 'nightly check daily logs coverage', format: 'full' });
+    const oldMemory = result.memories.find(
+      (m: any) => m.observation_id === old.observationId
+    );
+    assert.ok(oldMemory, 'recall must return the backdated log observation');
+    assert.ok(
+      !oldMemory.stale,
+      'a dated log entry is not out of date — it is the entry for that date'
+    );
   });
 
   test('recent observation → not stale', async () => {
