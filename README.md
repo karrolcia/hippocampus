@@ -419,6 +419,17 @@ Every `remember` call returns a `novelty` score (0–1) computed via SVD subspac
 
 When `remember` stores a new observation, it reports existing observations that overlap (cosine similarity 0.5–0.85) — the zone between "clearly different" and "near-duplicate." The AI sees these in the response and can consolidate immediately instead of waiting for a batch `consolidate` pass. No extra computation: the dedup scan already compares against all entity embeddings.
 
+`near_matches` also carries any match above 0.85 that the dedup guards held back — an append-only entity, or an observation from a different UTC day (see [Append-safe writes](#append-safe-writes)). Overlap that isn't acted on is still overlap worth seeing.
+
+### Append-safe writes
+
+Dedup on write is destructive: a >= 0.85 match whose stored content is shorter is deleted and replaced. That is right for a fact being restated with more detail, and wrong for a log — two dated entries sharing a template can clear 0.85 on the template alone. Two guards bound it:
+
+- **Append-only entities.** Entity names matching a prefix in `HIPPO_APPEND_ONLY_PREFIXES` (default `ops:daily-log:,ops:session-check,synthesis:`) are exempt from dedup entirely — nothing is skipped, nothing is deleted. Set it to your own log namespaces; set it empty to disable exemptions.
+- **Same-day scoping.** Everywhere else, dedup only considers observations created on the same UTC calendar day. Entries written on different days can never evict each other, however similar they look.
+
+Any write that did delete something says so in a top-level `replaced: true`, with the evicted text in `replaced_observation` and its id in `replaced_observation_id` — so a caller can detect (and undo) data loss without parsing the human-readable `message`.
+
 ### Sleep mode
 
 `consolidate` with `mode: "sleep"` runs batch lifecycle analysis — the overnight defrag for your knowledge graph. Uses SVD leverage scores combined with temporal signals to classify old observations into three categories:

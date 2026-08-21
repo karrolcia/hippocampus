@@ -95,8 +95,9 @@ Schema V6 (current). Entire database encrypted at rest with SQLCipher. Embedding
 
 ```
 remember(content, entity?, type?, source?, importance?, kind?)
-  → Store a fact. Dedup on write (cosine >= 0.85), near-match detection (0.5-0.85),
-    subspace novelty scoring via SVD. Returns version_hash.
+  → Store a fact. Dedup on write (cosine >= 0.85, same UTC day only, append-only
+    entities exempt), near-match detection, subspace novelty scoring via SVD.
+    Returns version_hash, and replaced: true if the write deleted anything.
 
 recall(query, limit?, type?, since?, kind?, spread?, format?)
   → Semantic + keyword search. 4 formats (full/compact/wire/index).

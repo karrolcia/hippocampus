@@ -8,6 +8,13 @@ const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 export const VERSION: string = pkg.version;
 
+// Entities whose observations are append-only by contract: each write is a new
+// log entry, never a restatement of an earlier one. Dedup-on-write must not
+// touch them — a >= 0.85 similarity match between two entries written weeks
+// apart is the shared skeleton of the log format, not redundant information.
+// See D10 / CLAUDE.md "Dedup on write".
+export const DEFAULT_APPEND_ONLY_PREFIXES = 'ops:daily-log:,ops:session-check,synthesis:';
+
 const configSchema = z.object({
   port: z.coerce.number().default(3000),
   host: z.string().default('0.0.0.0'),
@@ -22,6 +29,17 @@ const configSchema = z.object({
   oauthPasswordHash: z.string().optional(),
   transformersCache: z.string().optional(),
   contextMaxObservations: z.coerce.number().min(10).max(10000).default(100),
+  // Comma-separated entity-name prefixes exempt from dedup-on-write.
+  // Unset -> the defaults above; empty string -> no exemptions at all.
+  appendOnlyPrefixes: z
+    .string()
+    .default(DEFAULT_APPEND_ONLY_PREFIXES)
+    .transform(s =>
+      s
+        .split(',')
+        .map(prefix => prefix.trim().toLowerCase())
+        .filter(prefix => prefix.length > 0)
+    ),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -41,6 +59,7 @@ function loadConfig(): Config {
     oauthPasswordHash: process.env.HIPPO_OAUTH_PASSWORD_HASH,
     transformersCache: process.env.TRANSFORMERS_CACHE,
     contextMaxObservations: process.env.HIPPO_CONTEXT_MAX_OBSERVATIONS,
+    appendOnlyPrefixes: process.env.HIPPO_APPEND_ONLY_PREFIXES,
   });
 
   if (!result.success) {
