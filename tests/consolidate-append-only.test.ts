@@ -100,8 +100,14 @@ describe('consolidate: observations mode', () => {
     assert.match(result.message, /append-only/);
     assert.doesNotMatch(result.message, /use merge to consolidate/);
     // The misleading-all-clear shape: a bare "no observations" would read as
-    // "nothing here" rather than "these are protected".
-    assert.doesNotMatch(result.message, /^No observations found\.$/);
+    // "nothing here" rather than "these are protected". Assert against the
+    // string the code actually emits — matching one it never produces is an
+    // assertion that cannot fail.
+    assert.notEqual(
+      result.message.trim(),
+      'No observations to consolidate.',
+      'an empty result on a log entity must say why it is empty'
+    );
   });
 
   test('CONTROL: the same pair on an ordinary entity still clusters', async () => {
@@ -167,6 +173,25 @@ describe('consolidate: sleep mode', () => {
     assert.equal(result.excluded_append_only, 0);
   });
 
+  test('sleep buckets carry the marker when surfaced through the hatch', async () => {
+    // The iteration-1 blocker was a declared-but-never-assigned append_only on a
+    // disposal path. Sleep was the remaining constructor with no assertion on it,
+    // so deleting its marker left the whole suite green.
+    const result = (await consolidate({
+      entity: 'ops:daily-log:sleep-probe',
+      mode: 'sleep',
+      include_append_only: true,
+    })) as type.SleepResult;
+
+    const surfaced = [...result.compress, ...result.prune, ...result.refresh];
+    assert.ok(surfaced.length > 0, 'the hatch must actually surface the buckets');
+    assert.ok(
+      surfaced.every(o => o.append_only === true),
+      'append-only members must be marked wherever they can be acted on'
+    );
+    assert.match(result.message, /include_append_only was set/);
+  });
+
   test('a store-wide pass excludes log entities without excluding everything else', async () => {
     // This is the shape the fortnightly dreaming pass actually runs.
     const result = (await consolidate({ mode: 'sleep' })) as type.SleepResult;
@@ -184,9 +209,12 @@ describe('consolidate: contradictions mode', () => {
   // The contradiction predicate needs high embedding similarity AND low lexical
   // overlap, which pull against each other: two log entries worded differently
   // enough to clear jaccard < 0.3 also drift apart in embedding space. This pair
-  // measures 0.521 / 0.000, so the test sets threshold 0.45 to reach the pairing
-  // it wants to prove is suppressed. Asserting pairs.length === 0 at the 0.6
-  // default would pass whether or not the filter existed.
+  // measures 0.521 / 0.000, so the test sets threshold 0.50 — the lowest value
+  // the MCP schema accepts (.min(0.5)), keeping the test on an input a client
+  // could actually send. Headroom is thin (0.021); if the embedding model ever
+  // drifts, the CONTROL below fails loudly rather than the exclusion test
+  // passing quietly. Asserting pairs.length === 0 at the 0.6 default would pass
+  // whether or not the filter existed at all.
   const CLEAN = '2026-08-01 nightly check. All contexts wrote daily logs. Zero gaps.';
   const DIRTY = '2026-08-02 session sweep. Multiple projects skipped their write. Several holes.';
 
@@ -198,7 +226,7 @@ describe('consolidate: contradictions mode', () => {
     const result = (await consolidate({
       entity: 'ops:daily-log:contradiction-probe',
       mode: 'contradictions',
-      threshold: 0.45,
+      threshold: 0.5,
     })) as type.ContradictionResult;
 
     assert.equal(result.pairs.length, 0);
@@ -210,7 +238,7 @@ describe('consolidate: contradictions mode', () => {
     const result = (await consolidate({
       entity: 'ops:daily-log:contradiction-probe',
       mode: 'contradictions',
-      threshold: 0.45,
+      threshold: 0.5,
       include_append_only: true,
     })) as type.ContradictionResult;
 

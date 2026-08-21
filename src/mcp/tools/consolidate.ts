@@ -52,6 +52,17 @@ function appendOnlyNote(excluded: number): string {
   return ` ${excluded} observation(s) on append-only entities were excluded — log entries sharing a format are not duplicates, and dated entries are not redundancy. Pass include_append_only: true to inspect them anyway.`;
 }
 
+/**
+ * When the escape hatch is used, `excluded` is 0 and the note above is empty —
+ * so the response would carry "use merge to consolidate" with nothing at the
+ * message level saying these are log entries. The per-member `append_only` flag
+ * is the machine signal; this is the one a model reading prose will see.
+ */
+function includedAppendOnlyCaveat(hasAppendOnlyMembers: boolean): string {
+  if (!hasAppendOnlyMembers) return '';
+  return ' NOTE: results include append-only (log) entities because include_append_only was set. Dated log entries are not duplicates of each other — only act on these to remove an accidental double-write, after reading both entries in full.';
+}
+
 interface ClusterObservation {
   observation_id: string;
   append_only?: boolean;
@@ -260,7 +271,9 @@ function consolidateObservations(input: ConsolidateInput): ConsolidateResult {
     excluded_append_only: excluded,
     message: (clusters.length === 0
       ? `Scanned ${vectors.length} observations — no clusters found above threshold ${threshold}.`
-      : `Found ${clusters.length} cluster(s) across ${vectors.length} observations. Review each cluster and use merge to consolidate.`) + appendOnlyNote(excluded),
+      : `Found ${clusters.length} cluster(s) across ${vectors.length} observations. Review each cluster and use merge to consolidate.`) +
+      appendOnlyNote(excluded) +
+      includedAppendOnlyCaveat(clusters.some(c => c.observations.some(o => o.append_only))),
   };
 }
 
@@ -375,7 +388,9 @@ async function resolveEntities(
     excluded_append_only: excluded,
     message: (clusters.length === 0
       ? `Scanned ${entities.length} entity names — no similar names found above threshold ${threshold}.`
-      : `Found ${clusters.length} cluster(s) of potentially duplicate entities across ${entities.length} total. Review each cluster and decide which to merge.`) + appendOnlyEntityNote(excluded),
+      : `Found ${clusters.length} cluster(s) of potentially duplicate entities across ${entities.length} total. Review each cluster and decide which to merge.`) +
+      appendOnlyEntityNote(excluded) +
+      includedAppendOnlyCaveat(clusters.some(c => c.entities.some(e => e.append_only))),
   };
 }
 
@@ -447,7 +462,9 @@ function detectContradictions(input: ConsolidateInput): ContradictionResult {
     excluded_append_only: excluded,
     message: (pairs.length === 0
       ? `Scanned ${vectors.length} observations — no potential contradictions found.`
-      : `Found ${pairs.length} potential contradiction(s) across ${vectors.length} observations. Review each pair — high semantic similarity with low lexical overlap suggests conflicting claims.`) + appendOnlyNote(excluded),
+      : `Found ${pairs.length} potential contradiction(s) across ${vectors.length} observations. Review each pair — high semantic similarity with low lexical overlap suggests conflicting claims.`) +
+      appendOnlyNote(excluded) +
+      includedAppendOnlyCaveat(pairs.some(p => p.observations.some(o => o.append_only))),
   };
 }
 
@@ -628,6 +645,11 @@ function sleepMode(input: ConsolidateInput): SleepResult {
     compress,
     prune,
     refresh,
-    message: message + appendOnlyNote(excluded),
+    message:
+      message +
+      appendOnlyNote(excluded) +
+      includedAppendOnlyCaveat(
+        [...compress, ...prune, ...refresh].some(o => o.append_only)
+      ),
   };
 }
