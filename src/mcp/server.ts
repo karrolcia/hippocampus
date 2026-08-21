@@ -23,7 +23,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'remember',
-    'Store a memory or piece of information. Use this to save facts, preferences, decisions, reasoning, or exploratory thinking. For facts and preferences, use telegraphic form — "PhD atmospheric physics, TU Delft" not "Karolina has a PhD in atmospheric physics from TU Delft". For rationale and exploration, capture the full reasoning — why a decision was made, what tradeoffs were weighed, or half-formed ideas worth preserving.',
+    'Store a memory or piece of information. Use this to save facts, preferences, decisions, reasoning, or exploratory thinking. For facts and preferences, use telegraphic form — "PhD atmospheric physics, TU Delft" not "Karolina has a PhD in atmospheric physics from TU Delft". For rationale and exploration, capture the full reasoning — why a decision was made, what tradeoffs were weighed, or half-formed ideas worth preserving. Near-duplicate writes are deduplicated, which can DELETE the observation being duplicated: if the response has replaced: true, check replaced_observation before moving on — that text is gone otherwise. Dedup never touches observations from an earlier day, or entities in the configured append-only namespaces (log-style entities, flagged append_only in the response).',
     {
       content: z
         .string()

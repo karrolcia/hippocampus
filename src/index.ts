@@ -170,6 +170,14 @@ if (isMain) {
   // Start server
   console.log(`Hippocampus starting on http://${config.host}:${config.port}`);
   console.log(`MCP endpoint: http://${config.host}:${config.port}/mcp`);
+  // Config metadata only — never memory content. A typo'd separator collapses
+  // the list to one garbage prefix and silently unprotects every log entity,
+  // so the resolved list is printed where it can be eyeballed after a deploy.
+  console.log(
+    `Append-only entities (dedup exempt): ${
+      config.appendOnlyPrefixes.length > 0 ? config.appendOnlyPrefixes.join(', ') : 'none'
+    }`
+  );
 
   serve({
     fetch: app.fetch,

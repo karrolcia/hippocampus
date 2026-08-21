@@ -425,7 +425,7 @@ When `remember` stores a new observation, it reports existing observations that 
 
 Dedup on write is destructive: a >= 0.85 match whose stored content is shorter is deleted and replaced. That is right for a fact being restated with more detail, and wrong for a log — two dated entries sharing a template can clear 0.85 on the template alone. Two guards bound it:
 
-- **Append-only entities.** Entity names matching a prefix in `HIPPO_APPEND_ONLY_PREFIXES` (default `ops:daily-log:,ops:session-check,synthesis:`) are exempt from dedup entirely — nothing is skipped, nothing is deleted. Set it to your own log namespaces; set it empty to disable exemptions.
+- **Append-only entities.** Entity names matching a prefix in `HIPPO_APPEND_ONLY_PREFIXES` (default `ops:daily-log:,ops:session-check,synthesis:`) are exempt from dedup entirely — nothing is skipped, nothing is deleted. Set it to your own log namespaces. Leaving it unset or blank keeps the defaults — blank cannot mean "off", because a compose file forwarding an unset variable would otherwise silently disable the protection; to actually turn exemptions off, set it to the literal `none`.
 - **Same-day scoping.** Everywhere else, dedup only considers observations created on the same UTC calendar day. Entries written on different days can never evict each other, however similar they look.
 
 Any write that did delete something says so in a top-level `replaced: true`, with the evicted text in `replaced_observation` and its id in `replaced_observation_id` — so a caller can detect (and undo) data loss without parsing the human-readable `message`.

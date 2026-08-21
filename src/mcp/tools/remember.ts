@@ -58,7 +58,11 @@ function utcDay(timestamp: string | null | undefined): string | null {
 }
 
 export function isAppendOnlyEntity(entityName: string): boolean {
-  const name = entityName.toLowerCase();
+  // trim() because entity names are stored verbatim (the schema's sanitizer
+  // deliberately keeps \t, \n, \r) and are looked up by exact match — so
+  // " synthesis:x" is a distinct entity whose name startsWith() would miss.
+  // The guard has to fail safe on a malformed name, not open the delete path.
+  const name = entityName.trim().toLowerCase();
   return config.appendOnlyPrefixes.some(prefix => name.startsWith(prefix));
 }
 
@@ -76,6 +80,8 @@ export interface RememberResult {
   replaced_observation?: string;
   replaced_observation_id?: string;
   replaced_count?: number;
+  /** Everything a `replace_kind` write deleted, so it can be put back. */
+  replaced_observations?: Array<{ observation_id: string; content: string }>;
   append_only?: boolean;
   near_matches?: Array<{ content: string; similarity: number }>;
   novelty?: number;
@@ -90,6 +96,13 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
   if (input.replace_kind && input.kind) {
     const existing = getObservationsByEntityAndKind(entity.id, input.kind);
     const replacedCount = existing.length;
+    // Captured before the delete loop — this is the only copy the caller can
+    // recover from, and replace_kind has the widest blast radius of any
+    // remember() path (N observations, not one).
+    const replacedObservations = existing.map(obs => ({
+      observation_id: obs.id,
+      content: obs.content,
+    }));
 
     for (const obs of existing) {
       deleteEmbedding(obs.id);
@@ -115,6 +128,8 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
       version_hash: updated?.version_hash,
       replaced: replacedCount > 0,
       replaced_count: replacedCount,
+      ...(replacedCount > 0 ? { replaced_observations: replacedObservations } : {}),
+      ...(isAppendOnlyEntity(entity.name) ? { append_only: true } : {}),
     };
   }
 

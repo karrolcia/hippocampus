@@ -169,6 +169,26 @@ describe('append-only entities are exempt from dedup', () => {
     assert.ok(observations.some(o => o.content === target), 'the corrected observation must survive');
   });
 
+  test('a leading-whitespace entity name is still protected', async () => {
+    // Entity names are stored verbatim (the content sanitizer deliberately keeps
+    // \t, \n, \r) and looked up by exact match, so " synthesis:x" is a distinct
+    // entity. Before trim(), one stray space reopened the delete path.
+    const entity = ' synthesis:whitespace-name';
+    const target =
+      'Ingest backlog as of 2026-08-13: 42 research findings pending, 6 granola transcripts unmatched, ' +
+      'oldest item 2026-07-02. Blocked on the sync script hitting a Keychain timeout mid-run.';
+    const correction =
+      'CORRECTION. ' + target + ' The Keychain blocker in that note is wrong — it was fixed on 2026-08-09.';
+
+    assert.equal(isAppendOnlyEntity(entity), true, 'the guard must trim before matching');
+
+    await remember({ entity, content: target });
+    const second = await remember({ entity, content: correction });
+
+    assert.equal(second.replaced, false);
+    assert.equal(observationsFor(entity).length, 2);
+  });
+
   test('isAppendOnlyEntity matches configured prefixes, case-insensitively', () => {
     assert.equal(isAppendOnlyEntity('ops:daily-log:hippocampus'), true);
     assert.equal(isAppendOnlyEntity('ops:session-check'), true);
@@ -255,6 +275,37 @@ describe('same-day dedup still works, and announces deletion', () => {
     });
     assert.equal(second.replaced, true);
     assert.equal(second.replaced_count, 1);
+    assert.deepEqual(second.replaced_observations, [
+      { observation_id: first.observationId, content: 'last run 2026-08-20T21:47:00Z, 3 contexts written' },
+    ]);
     assert.equal(observationsFor('agent:test-checkpoint').length, 1);
+  });
+
+  test('replace_kind on an append-only entity returns everything it deleted', async () => {
+    // replace_kind is explicit caller intent, so it is not blocked here — but it
+    // has the widest blast radius of any remember() path (N observations, not
+    // one), so the response has to carry enough to put them back.
+    const entries = ['harvest run one, 3 contexts', 'harvest run two, 5 contexts'];
+    for (const content of entries) {
+      await remember({ entity: 'ops:daily-log:replace-kind', content, kind: 'harvest' });
+    }
+    assert.equal(observationsFor('ops:daily-log:replace-kind').length, 2);
+
+    const result = await remember({
+      entity: 'ops:daily-log:replace-kind',
+      content: 'harvest run three, 2 contexts',
+      kind: 'harvest',
+      replace_kind: true,
+    });
+
+    assert.equal(result.replaced, true);
+    assert.equal(result.replaced_count, 2);
+    assert.equal(result.append_only, true, 'caller must see it bulk-deleted from a log entity');
+    assert.deepEqual(
+      result.replaced_observations?.map(o => o.content).sort(),
+      [...entries].sort(),
+      'both deleted entries must be recoverable from the response'
+    );
+    assert.equal(observationsFor('ops:daily-log:replace-kind').length, 1);
   });
 });

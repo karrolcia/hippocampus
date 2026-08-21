@@ -15,6 +15,15 @@ export const VERSION: string = pkg.version;
 // See D10 / CLAUDE.md "Dedup on write".
 export const DEFAULT_APPEND_ONLY_PREFIXES = 'ops:daily-log:,ops:session-check,synthesis:';
 
+export function parseAppendOnlyPrefixes(raw: string): string[] {
+  const value = raw.trim() === '' ? DEFAULT_APPEND_ONLY_PREFIXES : raw;
+  if (value.trim().toLowerCase() === 'none') return [];
+  return value
+    .split(',')
+    .map(prefix => prefix.trim().toLowerCase())
+    .filter(prefix => prefix.length > 0);
+}
+
 const configSchema = z.object({
   port: z.coerce.number().default(3000),
   host: z.string().default('0.0.0.0'),
@@ -30,16 +39,13 @@ const configSchema = z.object({
   transformersCache: z.string().optional(),
   contextMaxObservations: z.coerce.number().min(10).max(10000).default(100),
   // Comma-separated entity-name prefixes exempt from dedup-on-write.
-  // Unset -> the defaults above; empty string -> no exemptions at all.
-  appendOnlyPrefixes: z
-    .string()
-    .default(DEFAULT_APPEND_ONLY_PREFIXES)
-    .transform(s =>
-      s
-        .split(',')
-        .map(prefix => prefix.trim().toLowerCase())
-        .filter(prefix => prefix.length > 0)
-    ),
+  // Unset OR blank -> the defaults above; the literal 'none' -> no exemptions.
+  // Blank has to mean defaults, not "off": docker-compose's `${VAR:-}` idiom
+  // forwards an unset variable as an empty string, so treating blank as "no
+  // exemptions" would quietly disable data-loss protection on every deployment
+  // that merely forwards the variable without setting it. Disabling is possible,
+  // but it has to be typed out.
+  appendOnlyPrefixes: z.string().default(DEFAULT_APPEND_ONLY_PREFIXES).transform(parseAppendOnlyPrefixes),
 });
 
 export type Config = z.infer<typeof configSchema>;
