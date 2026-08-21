@@ -31,9 +31,13 @@ export function parseAppendOnlyPrefixes(raw: string): string[] {
 }
 
 /**
- * True when the entity's observations are append-only by contract. Used by
- * `remember` (dedup exemption) and `consolidate` (never propose consolidating
- * dated log entries).
+ * True when the entity's observations are append-only by contract. Three
+ * consumers, one per hazard leg — keep this list current, it is what tells the
+ * next editor how much rides on the predicate:
+ *   - `remember`  — dedup exemption, so a write cannot evict a dated entry (D10)
+ *   - `consolidate` — never propose merging/pruning dated entries (D11)
+ *   - `recall`    — never flag a dated entry `stale`, since the hint's remedy
+ *                   is `update`, which replaces it (D12)
  *
  * trim() because entity names are stored verbatim (the content sanitizer
  * deliberately keeps \t, \n, \r) and are looked up by exact match — so
@@ -59,7 +63,8 @@ const configSchema = z.object({
   oauthPasswordHash: z.string().optional(),
   transformersCache: z.string().optional(),
   contextMaxObservations: z.coerce.number().min(10).max(10000).default(100),
-  // Comma-separated entity-name prefixes exempt from dedup-on-write.
+  // Comma-separated entity-name prefixes treated as append-only. Governs three
+  // behaviours, not just dedup — see isAppendOnlyEntity above.
   // Unset OR blank -> the defaults above; the literal 'none' -> no exemptions.
   // Blank has to mean defaults, not "off": docker-compose's `${VAR:-}` idiom
   // forwards an unset variable as an empty string, so treating blank as "no
