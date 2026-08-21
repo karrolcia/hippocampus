@@ -16,12 +16,18 @@ export const VERSION: string = pkg.version;
 export const DEFAULT_APPEND_ONLY_PREFIXES = 'ops:daily-log:,ops:session-check,synthesis:';
 
 export function parseAppendOnlyPrefixes(raw: string): string[] {
-  const value = raw.trim() === '' ? DEFAULT_APPEND_ONLY_PREFIXES : raw;
-  if (value.trim().toLowerCase() === 'none') return [];
-  return value
-    .split(',')
-    .map(prefix => prefix.trim().toLowerCase())
-    .filter(prefix => prefix.length > 0);
+  const splitList = (value: string) =>
+    value
+      .split(',')
+      .map(prefix => prefix.trim().toLowerCase())
+      .filter(prefix => prefix.length > 0);
+
+  if (raw.trim().toLowerCase() === 'none') return [];
+  const prefixes = splitList(raw);
+  // Blank, or a value that parses to nothing (",", ",,"), is an unset or
+  // typo'd variable — not a request to turn off data-loss protection. Only the
+  // literal 'none' does that.
+  return prefixes.length > 0 ? prefixes : splitList(DEFAULT_APPEND_ONLY_PREFIXES);
 }
 
 const configSchema = z.object({

@@ -133,6 +133,7 @@ function ongoingPrompt(sourceHint: string, existingSection: string): string {
 
 4. **On the \`remember\` response — handle \`near_matches\`:**
    - \`novelty\` < 0.3 (and a near-match exists with high overlap) → use \`update\` on the existing observation, or \`merge\` if multiple cluster. Do not accumulate duplicates.
+   - **Exception — \`append_only: true\` in the response:** the entity is a log (dated entries sharing a format). Overlap between entries is expected and is NOT redundancy. Never \`update\`, \`merge\` or otherwise consolidate its observations, whatever the novelty score says; its \`near_matches\` are truncated previews, not full content.
    - \`novelty\` 0.3–0.6 → capture, but note the relationship to the near-match in your reasoning.
    - \`novelty\` > 0.6 → genuine new information.
 

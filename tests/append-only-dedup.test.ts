@@ -31,6 +31,7 @@ delete process.env.HIPPO_APPEND_ONLY_PREFIXES; // exercise the shipped defaults
 
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/db/index.js');
 const { remember, isAppendOnlyEntity, DEDUP_THRESHOLD } = await import('../src/mcp/tools/remember.js');
+const { update } = await import('../src/mcp/tools/update.js');
 const { findEntityByName } = await import('../src/db/entities.js');
 const { getObservationsByEntity } = await import('../src/db/observations.js');
 const { generateEmbedding } = await import('../src/embeddings/embedder.js');
@@ -169,6 +170,35 @@ describe('append-only entities are exempt from dedup', () => {
     assert.ok(observations.some(o => o.content === target), 'the corrected observation must survive');
   });
 
+  test('a reported near_match cannot be handed back as a delete key', async () => {
+    // The guard preserves the entry, and then the response has to not invite the
+    // caller to remove it by hand. near_matches content is otherwise
+    // byte-identical to the stored observation, which is exactly what `update`
+    // matches on — and onboard's standing instruction is "high overlap + low
+    // novelty -> update or merge". Previews break that chain.
+    const entity = 'ops:daily-log:preview';
+    const first = await remember({ entity, content: HARVEST_JULY });
+    backdateObservation(first.observationId, '2026-07-31');
+    const second = await remember({ entity, content: HARVEST_AUGUST });
+
+    const reported = second.near_matches?.[0];
+    assert.ok(reported, 'the overlap must still be reported');
+    assert.ok(HARVEST_JULY.length > 200, 'fixture must be long enough to be truncated');
+    assert.notEqual(reported!.content, HARVEST_JULY, 'must not echo the stored content verbatim');
+    assert.ok(reported!.content.length <= 201, 'preview only');
+    assert.match(second.message, /Do NOT consolidate/);
+    assert.doesNotMatch(second.message, /consider consolidating/);
+
+    // The whole point: feeding it back into update() fails safe.
+    const attempted = await update({
+      entity,
+      old_content: reported!.content,
+      new_content: 'merged harvest entry',
+    });
+    assert.equal(attempted.success, false);
+    assert.equal(observationsFor(entity).length, 2, 'both entries must still be there');
+  });
+
   test('a leading-whitespace entity name is still protected', async () => {
     // Entity names are stored verbatim (the content sanitizer deliberately keeps
     // \t, \n, \r) and looked up by exact match, so " synthesis:x" is a distinct
@@ -218,6 +248,18 @@ describe('dedup is scoped to the same UTC calendar day', () => {
       'the out-of-day >= 0.85 match must still be reported'
     );
     assert.equal(observationsFor('project:unlisted-log').length, 2);
+  });
+
+  test('non-append-only entities keep full near_match content', async () => {
+    // Consolidation IS the intended workflow off the log entities ("consolidate =
+    // clustering only, the AI does the merging"), and it needs the exact content
+    // as an update key. The preview truncation must not leak into that path.
+    const first = await remember({ entity: 'project:full-near-match', content: HARVEST_JULY });
+    backdateObservation(first.observationId, '2026-07-31');
+    const second = await remember({ entity: 'project:full-near-match', content: HARVEST_AUGUST });
+
+    assert.equal(second.near_matches?.[0].content, HARVEST_JULY);
+    assert.match(second.message, /consider consolidating/);
   });
 
   test('yesterday counts as a different day', async () => {

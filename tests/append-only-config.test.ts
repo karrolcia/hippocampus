@@ -39,6 +39,19 @@ describe('HIPPO_APPEND_ONLY_PREFIXES', () => {
     }
   });
 
+  test('a value that parses to nothing is a typo, not a request to disable', () => {
+    assert.deepEqual(parseAppendOnlyPrefixes(','), [
+      'ops:daily-log:',
+      'ops:session-check',
+      'synthesis:',
+    ]);
+    assert.deepEqual(parseAppendOnlyPrefixes(' , , '), [
+      'ops:daily-log:',
+      'ops:session-check',
+      'synthesis:',
+    ]);
+  });
+
   test('disabling exemptions requires typing it out', () => {
     assert.deepEqual(parseAppendOnlyPrefixes('none'), []);
     assert.deepEqual(parseAppendOnlyPrefixes('  NONE  '), []);

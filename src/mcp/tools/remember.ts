@@ -10,6 +10,7 @@ import { config } from '../../config.js';
 export const DEDUP_THRESHOLD = 0.85;
 const NEAR_MATCH_THRESHOLD = 0.5;
 const MAX_NEAR_MATCHES = 3;
+const APPEND_ONLY_PREVIEW_CHARS = 200;
 
 export const rememberSchema = z.object({
   content: z
@@ -141,7 +142,7 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
   // (see the guards documented above) — everything else can only ever be reported.
   const existing = getEmbeddingsByEntity(entity.id);
   const appendOnly = isAppendOnlyEntity(entity.name);
-  const today = utcDay(new Date().toISOString());
+  const today = new Date().toISOString().slice(0, 10);
   let bestMatch: { similarity: number; index: number } | null = null;
   const nearMatches: Array<{ content: string; similarity: number }> = [];
 
@@ -149,7 +150,8 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
     const sim = cosineSimilarity(vector, existing[i].vector);
     if (sim < NEAR_MATCH_THRESHOLD) continue;
 
-    const sameDay = today !== null && utcDay(existing[i].created_at) === today;
+    // A null/malformed created_at compares unequal, i.e. not dedup-eligible — fail safe.
+    const sameDay = utcDay(existing[i].created_at) === today;
     const dedupEligible = !appendOnly && sameDay;
 
     if (sim >= DEDUP_THRESHOLD && dedupEligible) {
@@ -165,6 +167,20 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
   // Keep top N near matches by similarity
   nearMatches.sort((a, b) => b.similarity - a.similarity);
   if (nearMatches.length > MAX_NEAR_MATCHES) nearMatches.length = MAX_NEAR_MATCHES;
+
+  if (appendOnly) {
+    // Truncated deliberately, and not only for tokens. near_matches content is
+    // byte-identical to the stored observation, which is exactly the key
+    // `update` matches on (`o.content === old_content`). Handing an LLM that
+    // key alongside a "consider consolidating" nudge is how an entry this
+    // guard just preserved gets deleted one call later — the same data loss,
+    // one layer up. A preview identifies the overlap without being executable.
+    for (const match of nearMatches) {
+      if (match.content.length > APPEND_ONLY_PREVIEW_CHARS) {
+        match.content = `${match.content.slice(0, APPEND_ONLY_PREVIEW_CHARS)}…`;
+      }
+    }
+  }
 
   if (bestMatch) {
     const match = existing[bestMatch.index];
@@ -252,7 +268,12 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
 
   if (nearMatches.length > 0) {
     result.near_matches = nearMatches;
-    result.message += `. These existing observations overlap — consider consolidating (nothing was deleted): ${nearMatches.map(m => `"${m.content.slice(0, 40)}..." (${m.similarity.toFixed(3)})`).join(', ')}`;
+    const listed = nearMatches
+      .map(m => `"${m.content.slice(0, 40)}..." (${m.similarity.toFixed(3)})`)
+      .join(', ');
+    result.message += appendOnly
+      ? `. ${nearMatches.length} earlier entr${nearMatches.length === 1 ? 'y overlaps' : 'ies overlap'} — expected here, since every write is a separate dated record sharing a format. Do NOT consolidate, update or merge them (previews only): ${listed}`
+      : `. These existing observations overlap — consider consolidating (nothing was deleted): ${listed}`;
   }
 
   return result;
