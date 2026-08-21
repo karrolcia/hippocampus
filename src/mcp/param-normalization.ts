@@ -25,7 +25,7 @@ const TOOL_PARAMS: Record<string, Set<string>> = {
   context: new Set(['topic', 'depth']),
   merge: new Set(['observation_ids', 'content']),
   merge_entities: new Set(['source_entities', 'target_entity', 'target_type']),
-  consolidate: new Set(['entity', 'threshold', 'mode', 'age_days']),
+  consolidate: new Set(['entity', 'threshold', 'mode', 'age_days', 'include_append_only']),
   export: new Set(['format', 'entity', 'type']),
   check_version: new Set(['entity', 'version_hash']),
   onboard: new Set(['source']),

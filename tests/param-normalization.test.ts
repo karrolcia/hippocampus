@@ -97,6 +97,17 @@ describe('normalizeParams — unit', () => {
     );
   });
 
+  test('consolidate camelCase params normalize, including include_append_only', () => {
+    // The leniency layer is keyed off a per-tool param set; a param added to the
+    // tool schema but not to that set silently stops normalizing, and Zod then
+    // strips the camelCase form. For include_append_only the failure is safe
+    // (the exclusion still applies) but the escape hatch just no-ops.
+    assert.deepEqual(
+      normalizeParams('consolidate', { includeAppendOnly: true, ageDays: 30 }),
+      { include_append_only: true, age_days: 30 }
+    );
+  });
+
   test('unknown keys pass through on non-strict tools (server rejects, not us)', () => {
     assert.deepEqual(
       normalizeParams('recall', { query: 'q', not_a_real_param: 'x' }),

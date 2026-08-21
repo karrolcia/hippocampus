@@ -181,16 +181,42 @@ describe('consolidate: sleep mode', () => {
 });
 
 describe('consolidate: contradictions mode', () => {
+  // The contradiction predicate needs high embedding similarity AND low lexical
+  // overlap, which pull against each other: two log entries worded differently
+  // enough to clear jaccard < 0.3 also drift apart in embedding space. This pair
+  // measures 0.521 / 0.000, so the test sets threshold 0.45 to reach the pairing
+  // it wants to prove is suppressed. Asserting pairs.length === 0 at the 0.6
+  // default would pass whether or not the filter existed.
+  const CLEAN = '2026-08-01 nightly check. All contexts wrote daily logs. Zero gaps.';
+  const DIRTY = '2026-08-02 session sweep. Multiple projects skipped their write. Several holes.';
+
   test('log entries are not paired as contradictions', async () => {
+    for (const content of [CLEAN, DIRTY]) {
+      await remember({ entity: 'ops:daily-log:contradiction-probe', content });
+    }
+
     const result = (await consolidate({
-      entity: 'ops:daily-log:consolidate-probe',
+      entity: 'ops:daily-log:contradiction-probe',
       mode: 'contradictions',
-      threshold: 0.6,
+      threshold: 0.45,
     })) as type.ContradictionResult;
 
     assert.equal(result.pairs.length, 0);
     assert.equal(result.excluded_append_only, 2);
     assert.match(result.message, /append-only/);
+  });
+
+  test('CONTROL: the same pair does get flagged when included', async () => {
+    const result = (await consolidate({
+      entity: 'ops:daily-log:contradiction-probe',
+      mode: 'contradictions',
+      threshold: 0.45,
+      include_append_only: true,
+    })) as type.ContradictionResult;
+
+    assert.equal(result.pairs.length, 1, 'fixture must be a real contradiction candidate');
+    assert.equal(result.excluded_append_only, 0);
+    assert.ok(result.pairs[0].observations.every(o => o.append_only === true));
   });
 });
 
@@ -229,5 +255,15 @@ describe('consolidate: entities mode', () => {
       'fixture must be a real entity-cluster candidate'
     );
     assert.equal(included.excluded_append_only, 0);
+
+    // merge_entities DELETES the source entity, so a cluster surfaced through the
+    // hatch must still carry the marker onboard's never-merge exception reads.
+    const logCluster = included.clusters.find(c =>
+      c.entities.some(e => e.name === 'ops:daily-log:codesea')
+    );
+    assert.ok(
+      logCluster!.entities.every(e => e.append_only === true),
+      'append-only members must be marked, not silently listed as merge candidates'
+    );
   });
 });

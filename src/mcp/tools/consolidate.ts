@@ -350,6 +350,12 @@ async function resolveEntities(
         const obs = getObservationsByEntity(e.id);
         return {
           name: e.name,
+          // Only reachable via include_append_only, and it has to be marked:
+          // this is the mode whose disposal tool (merge_entities) DELETES the
+          // source entity, and `append_only: true` is the signal onboard's
+          // never-merge exception keys off. A declared-but-unset field would
+          // leave the response saying only "decide which to merge".
+          ...(isAppendOnlyEntity(e.name) ? { append_only: true } : {}),
           type: e.type,
           observation_count: obs.length,
           last_updated: e.updated_at,
