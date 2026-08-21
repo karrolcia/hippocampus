@@ -428,6 +428,8 @@ Dedup on write is destructive: a >= 0.85 match whose stored content is shorter i
 - **Append-only entities.** Entity names matching a prefix in `HIPPO_APPEND_ONLY_PREFIXES` (default `ops:daily-log:,ops:session-check,synthesis:`) are exempt from dedup entirely — nothing is skipped, nothing is deleted. Set it to your own log namespaces. Leaving it unset or blank keeps the defaults — blank cannot mean "off", because a compose file forwarding an unset variable would otherwise silently disable the protection; to actually turn exemptions off, set it to the literal `none`.
 - **Same-day scoping.** Everywhere else, dedup only considers observations created on the same UTC calendar day. Entries written on different days can never evict each other, however similar they look.
 
+`consolidate` respects the same boundary: append-only entities are excluded from all four of its modes, so a log entity is never returned as a merge cluster, a `prune`/`compress`/`refresh` candidate, a contradiction pair, or an entity-resolution match. The count comes back as `excluded_append_only` and is named in the message — the drop is never silent. Pass `include_append_only: true` to inspect them anyway, which is worth doing occasionally to catch accidental double-writes, since these entities no longer dedup on write.
+
 Any write that did delete something says so in a top-level `replaced: true`, with the evicted text in `replaced_observation` and its id in `replaced_observation_id` — so a caller can detect (and undo) data loss without parsing the human-readable `message`.
 
 ### Sleep mode

@@ -10,10 +10,8 @@ import assert from 'node:assert/strict';
 process.env.HIPPO_PASSPHRASE = 'test-passphrase-for-append-only-config';
 process.env.HIPPO_APPEND_ONLY_PREFIXES = ' journal: , Notes:Log: ';
 
-const { config, DEFAULT_APPEND_ONLY_PREFIXES, parseAppendOnlyPrefixes } = await import(
-  '../src/config.js'
-);
-const { isAppendOnlyEntity } = await import('../src/mcp/tools/remember.js');
+const { config, DEFAULT_APPEND_ONLY_PREFIXES, parseAppendOnlyPrefixes, isAppendOnlyEntity } =
+  await import('../src/config.js');
 
 describe('HIPPO_APPEND_ONLY_PREFIXES', () => {
   test('parses a comma-separated list, trimmed and lowercased', () => {

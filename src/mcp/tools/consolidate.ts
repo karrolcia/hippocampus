@@ -3,16 +3,58 @@ import { getObservationsByEntity } from '../../db/observations.js';
 import { getEmbeddingsByEntity, generateEmbedding, type StoredVector } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
 import { computeRedundancyScores } from '../../embeddings/subspace.js';
+import { isAppendOnlyEntity } from '../../config.js';
 
 export interface ConsolidateInput {
   entity?: string;
   threshold?: number;
   mode?: 'observations' | 'entities' | 'contradictions' | 'sleep';
   age_days?: number;
+  include_append_only?: boolean;
+}
+
+/**
+ * Append-only entities are excluded from every mode (D11).
+ *
+ * `consolidate` proposes; `merge`, `merge_entities` and `update` dispose. On a
+ * log entity every proposal is a false positive by construction — two dated
+ * entries sharing a template are not duplicates, and a never-recalled old log
+ * entry is not dead weight, it is the record. Flagging them was not enough:
+ * a flagged cluster still ships full content plus observation ids next to
+ * "use merge to consolidate", which is the same loaded-gun shape D10 had to
+ * remove from `remember`'s response. Excluding them also stops sleep-mode
+ * `prune` — which every ops:daily-log:* observation qualifies for, being old
+ * and never individually recalled — from burying the genuine candidates.
+ *
+ * The exclusion is always counted and disclosed, never silent: a filter whose
+ * drops are invisible is how the original eviction went unnoticed for months.
+ * `include_append_only: true` restores the old behaviour for the one real use
+ * case — hunting accidental double-writes, which D10 made MORE likely by
+ * removing dedup from these entities entirely.
+ */
+function excludeAppendOnly<T>(
+  items: T[],
+  nameOf: (item: T) => string,
+  include?: boolean
+): { kept: T[]; excluded: number } {
+  if (include) return { kept: items, excluded: 0 };
+  const kept = items.filter(item => !isAppendOnlyEntity(nameOf(item)));
+  return { kept, excluded: items.length - kept.length };
+}
+
+function appendOnlyEntityNote(excluded: number): string {
+  if (excluded === 0) return '';
+  return ` ${excluded} append-only entit(y/ies) were excluded — log entities share a namespace prefix by design, so name similarity between them is not evidence they are the same entity. Pass include_append_only: true to inspect them anyway.`;
+}
+
+function appendOnlyNote(excluded: number): string {
+  if (excluded === 0) return '';
+  return ` ${excluded} observation(s) on append-only entities were excluded — log entries sharing a format are not duplicates, and dated entries are not redundancy. Pass include_append_only: true to inspect them anyway.`;
 }
 
 interface ClusterObservation {
   observation_id: string;
+  append_only?: boolean;
   entity: string;
   type: string | null;
   content: string;
@@ -29,11 +71,13 @@ export interface ConsolidateResult {
   success: boolean;
   total_observations: number;
   clusters: Cluster[];
+  excluded_append_only: number;
   message: string;
 }
 
 interface EntityClusterMember {
   name: string;
+  append_only?: boolean;
   type: string | null;
   observation_count: number;
   last_updated: string;
@@ -48,6 +92,7 @@ export interface EntityResolutionResult {
   success: boolean;
   total_entities: number;
   clusters: EntityCluster[];
+  excluded_append_only: number;
   message: string;
 }
 
@@ -61,6 +106,7 @@ export interface ContradictionResult {
   success: boolean;
   total_observations: number;
   pairs: ContradictionPair[];
+  excluded_append_only: number;
   message: string;
 }
 
@@ -98,7 +144,7 @@ class UnionFind {
 
 export async function consolidate(input: ConsolidateInput): Promise<ConsolidateResult | EntityResolutionResult | ContradictionResult | SleepResult> {
   if (input.mode === 'entities') {
-    return resolveEntities(input.threshold ?? 0.7);
+    return resolveEntities(input.threshold ?? 0.7, input.include_append_only);
   }
   if (input.mode === 'contradictions') {
     return detectContradictions(input);
@@ -121,22 +167,30 @@ function consolidateObservations(input: ConsolidateInput): ConsolidateResult {
         success: false,
         total_observations: 0,
         clusters: [],
+        excluded_append_only: 0,
         message: `Entity "${input.entity}" not found.`,
       };
     }
     entityId = entity.id;
   }
 
-  const vectors = getEmbeddingsByEntity(entityId);
+  const { kept: vectors, excluded } = excludeAppendOnly(
+    getEmbeddingsByEntity(entityId),
+    v => v.entity_name,
+    input.include_append_only
+  );
 
   if (vectors.length < 2) {
+    // Must not report a bare "No observations found" when the entity is simply
+    // append-only — a misleading all-clear is the exact shape this guards against.
     return {
       success: true,
       total_observations: vectors.length,
       clusters: [],
-      message: vectors.length === 0
-        ? 'No observations found.'
-        : 'Only one observation — nothing to consolidate.',
+      excluded_append_only: excluded,
+      message: (vectors.length === 0
+        ? 'No observations to consolidate.'
+        : 'Only one observation — nothing to consolidate.') + appendOnlyNote(excluded),
     };
   }
 
@@ -203,23 +257,37 @@ function consolidateObservations(input: ConsolidateInput): ConsolidateResult {
     success: true,
     total_observations: vectors.length,
     clusters,
-    message: clusters.length === 0
+    excluded_append_only: excluded,
+    message: (clusters.length === 0
       ? `Scanned ${vectors.length} observations — no clusters found above threshold ${threshold}.`
-      : `Found ${clusters.length} cluster(s) across ${vectors.length} observations. Review each cluster and use merge to consolidate.`,
+      : `Found ${clusters.length} cluster(s) across ${vectors.length} observations. Review each cluster and use merge to consolidate.`) + appendOnlyNote(excluded),
   };
 }
 
-async function resolveEntities(threshold: number): Promise<EntityResolutionResult> {
-  const entities = listEntities({ limit: 10000 });
+async function resolveEntities(
+  threshold: number,
+  includeAppendOnly?: boolean
+): Promise<EntityResolutionResult> {
+  // Log entities share a namespace prefix BY DESIGN, which is exactly what name
+  // embedding rewards: ops:daily-log:codesea <-> ops:daily-log:rsl-content
+  // measures 0.688, a whisker under the 0.7 default. Merging those would fold
+  // two different projects' logs into one entity — no observation is deleted,
+  // but the per-context separation the whole convention rests on is.
+  const { kept: entities, excluded } = excludeAppendOnly(
+    listEntities({ limit: 10000 }),
+    e => e.name,
+    includeAppendOnly
+  );
 
   if (entities.length < 2) {
     return {
       success: true,
       total_entities: entities.length,
       clusters: [],
-      message: entities.length === 0
-        ? 'No entities found.'
-        : 'Only one entity — nothing to resolve.',
+      excluded_append_only: excluded,
+      message: (entities.length === 0
+        ? 'No entities to resolve.'
+        : 'Only one entity — nothing to resolve.') + appendOnlyEntityNote(excluded),
     };
   }
 
@@ -298,9 +366,10 @@ async function resolveEntities(threshold: number): Promise<EntityResolutionResul
     success: true,
     total_entities: entities.length,
     clusters,
-    message: clusters.length === 0
+    excluded_append_only: excluded,
+    message: (clusters.length === 0
       ? `Scanned ${entities.length} entity names — no similar names found above threshold ${threshold}.`
-      : `Found ${clusters.length} cluster(s) of potentially duplicate entities across ${entities.length} total. Review each cluster and decide which to merge.`,
+      : `Found ${clusters.length} cluster(s) of potentially duplicate entities across ${entities.length} total. Review each cluster and decide which to merge.`) + appendOnlyEntityNote(excluded),
   };
 }
 
@@ -319,22 +388,28 @@ function detectContradictions(input: ConsolidateInput): ContradictionResult {
         success: false,
         total_observations: 0,
         pairs: [],
+        excluded_append_only: 0,
         message: `Entity "${input.entity}" not found.`,
       };
     }
     entityId = entity.id;
   }
 
-  const vectors = getEmbeddingsByEntity(entityId);
+  const { kept: vectors, excluded } = excludeAppendOnly(
+    getEmbeddingsByEntity(entityId),
+    v => v.entity_name,
+    input.include_append_only
+  );
 
   if (vectors.length < 2) {
     return {
       success: true,
       total_observations: vectors.length,
       pairs: [],
-      message: vectors.length === 0
-        ? 'No observations found.'
-        : 'Only one observation — nothing to compare.',
+      excluded_append_only: excluded,
+      message: (vectors.length === 0
+        ? 'No observations to compare.'
+        : 'Only one observation — nothing to compare.') + appendOnlyNote(excluded),
     };
   }
 
@@ -363,9 +438,10 @@ function detectContradictions(input: ConsolidateInput): ContradictionResult {
     success: true,
     total_observations: vectors.length,
     pairs,
-    message: pairs.length === 0
+    excluded_append_only: excluded,
+    message: (pairs.length === 0
       ? `Scanned ${vectors.length} observations — no potential contradictions found.`
-      : `Found ${pairs.length} potential contradiction(s) across ${vectors.length} observations. Review each pair — high semantic similarity with low lexical overlap suggests conflicting claims.`,
+      : `Found ${pairs.length} potential contradiction(s) across ${vectors.length} observations. Review each pair — high semantic similarity with low lexical overlap suggests conflicting claims.`) + appendOnlyNote(excluded),
   };
 }
 
@@ -386,6 +462,7 @@ function jaccardSimilarity(a: string, b: string): number {
 function toClusterObservation(v: StoredVector): ClusterObservation {
   return {
     observation_id: v.observation_id,
+    ...(isAppendOnlyEntity(v.entity_name) ? { append_only: true } : {}),
     entity: v.entity_name,
     type: v.entity_type,
     content: v.content,
@@ -398,6 +475,7 @@ function toClusterObservation(v: StoredVector): ClusterObservation {
 
 export interface SleepObservation {
   observation_id: string;
+  append_only?: boolean;
   entity: string;
   type: string | null;
   content: string;
@@ -410,6 +488,7 @@ export interface SleepObservation {
 export interface SleepResult {
   success: boolean;
   entity?: string;
+  excluded_append_only: number;
   total_observations: number;
   information_rank: number;
   redundancy_ratio: number;
@@ -431,6 +510,7 @@ function sleepMode(input: ConsolidateInput): SleepResult {
       return {
         success: false,
         entity: input.entity,
+        excluded_append_only: 0,
         total_observations: 0,
         information_rank: 0,
         redundancy_ratio: 0,
@@ -447,23 +527,35 @@ function sleepMode(input: ConsolidateInput): SleepResult {
   }
 
   // Collect all vectors and metadata across scoped entities
-  const allVectors: StoredVector[] = [];
+  const collected: StoredVector[] = [];
   for (const e of entityIds) {
     const vectors = getEmbeddingsByEntity(e.id);
-    allVectors.push(...vectors);
+    collected.push(...vectors);
   }
+
+  // Every ops:daily-log:* observation qualifies for `prune` (old + never
+  // individually recalled) and older ones for `compress` — so without this the
+  // fortnightly store-wide pass proposes deleting the entire log history, and
+  // buries the genuine candidates while doing it. `refresh` goes too: its action
+  // is `update`, which rewrites a dated entry (create-new + delete-old).
+  const { kept: allVectors, excluded } = excludeAppendOnly(
+    collected,
+    v => v.entity_name,
+    input.include_append_only
+  );
 
   if (allVectors.length === 0) {
     return {
       success: true,
       entity: input.entity,
+      excluded_append_only: excluded,
       total_observations: 0,
       information_rank: 0,
       redundancy_ratio: 0,
       compress: [],
       prune: [],
       refresh: [],
-      message: 'No observations found.',
+      message: 'No observations to analyse.' + appendOnlyNote(excluded),
     };
   }
 
@@ -488,6 +580,7 @@ function sleepMode(input: ConsolidateInput): SleepResult {
 
     const obs: SleepObservation = {
       observation_id: v.observation_id,
+      ...(isAppendOnlyEntity(v.entity_name) ? { append_only: true } : {}),
       entity: v.entity_name,
       type: v.entity_type,
       content: v.content,
@@ -522,12 +615,13 @@ function sleepMode(input: ConsolidateInput): SleepResult {
   return {
     success: true,
     entity: input.entity,
+    excluded_append_only: excluded,
     total_observations: allVectors.length,
     information_rank: rank,
     redundancy_ratio: redundancyRatio,
     compress,
     prune,
     refresh,
-    message,
+    message: message + appendOnlyNote(excluded),
   };
 }

@@ -30,6 +30,21 @@ export function parseAppendOnlyPrefixes(raw: string): string[] {
   return prefixes.length > 0 ? prefixes : splitList(DEFAULT_APPEND_ONLY_PREFIXES);
 }
 
+/**
+ * True when the entity's observations are append-only by contract. Used by
+ * `remember` (dedup exemption) and `consolidate` (never propose consolidating
+ * dated log entries).
+ *
+ * trim() because entity names are stored verbatim (the content sanitizer
+ * deliberately keeps \t, \n, \r) and are looked up by exact match — so
+ * " synthesis:x" is a distinct entity whose name startsWith() would miss. The
+ * guard has to fail safe on a malformed name, not open a destructive path.
+ */
+export function isAppendOnlyEntity(entityName: string): boolean {
+  const name = entityName.trim().toLowerCase();
+  return config.appendOnlyPrefixes.some(prefix => name.startsWith(prefix));
+}
+
 const configSchema = z.object({
   port: z.coerce.number().default(3000),
   host: z.string().default('0.0.0.0'),

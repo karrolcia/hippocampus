@@ -5,7 +5,7 @@ import { createRelationship, relationshipExists } from '../../db/relationships.j
 import { generateEmbedding, storeEmbedding, getEmbeddingsByEntity, deleteEmbedding } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
 import { computeNovelty } from '../../embeddings/subspace.js';
-import { config } from '../../config.js';
+import { config, isAppendOnlyEntity } from '../../config.js';
 
 export const DEDUP_THRESHOLD = 0.85;
 const NEAR_MATCH_THRESHOLD = 0.5;
@@ -56,15 +56,6 @@ function utcDay(timestamp: string | null | undefined): string | null {
   // created_at is SQLite datetime('now') — 'YYYY-MM-DD HH:MM:SS' in UTC.
   if (!timestamp || timestamp.length < 10) return null;
   return timestamp.slice(0, 10);
-}
-
-export function isAppendOnlyEntity(entityName: string): boolean {
-  // trim() because entity names are stored verbatim (the schema's sanitizer
-  // deliberately keeps \t, \n, \r) and are looked up by exact match — so
-  // " synthesis:x" is a distinct entity whose name startsWith() would miss.
-  // The guard has to fail safe on a malformed name, not open the delete path.
-  const name = entityName.trim().toLowerCase();
-  return config.appendOnlyPrefixes.some(prefix => name.startsWith(prefix));
 }
 
 export interface RememberResult {

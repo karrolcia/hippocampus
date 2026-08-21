@@ -415,7 +415,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'consolidate',
-    'Identify groups of similar or overlapping memories that could be merged into fewer, denser observations. Returns clusters — review each cluster and use merge to consolidate. "sleep" mode runs batch lifecycle analysis: identifies observations to compress (redundant), prune (never recalled), or refresh (actively used but stale).',
+    'Identify groups of similar or overlapping memories that could be merged into fewer, denser observations. Returns clusters — review each cluster and use merge to consolidate. "sleep" mode runs batch lifecycle analysis: identifies observations to compress (redundant), prune (never recalled), or refresh (actively used but stale). Append-only entities (log-style namespaces) are excluded from every mode and never proposed for merging, pruning or refreshing — dated entries that share a format are not duplicates. The count is disclosed as excluded_append_only.',
     {
       entity: z
         .string()
@@ -438,6 +438,10 @@ export function createMcpServer(): McpServer {
         .max(365)
         .default(30)
         .describe('Minimum age in days for sleep mode candidates (default 30). Only observations older than this are analyzed.'),
+      include_append_only: z
+        .boolean()
+        .optional()
+        .describe('Include append-only (log-style) entities, which are excluded by default because every cluster on them is a false positive — dated entries sharing a format are not duplicates. Set true ONLY to hunt accidental double-writes on a specific log entity; never for a routine or store-wide consolidation pass, and never act on the result without reading both entries in full.'),
     },
     async (args) => {
       try {
@@ -446,6 +450,7 @@ export function createMcpServer(): McpServer {
           threshold: args.threshold,
           mode: args.mode,
           age_days: args.age_days,
+          include_append_only: args.include_append_only,
         });
         return {
           content: [

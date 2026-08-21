@@ -30,7 +30,8 @@ process.env.HIPPO_DB_PATH = DB_PATH;
 delete process.env.HIPPO_APPEND_ONLY_PREFIXES; // exercise the shipped defaults
 
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/db/index.js');
-const { remember, isAppendOnlyEntity, DEDUP_THRESHOLD } = await import('../src/mcp/tools/remember.js');
+const { remember, DEDUP_THRESHOLD } = await import('../src/mcp/tools/remember.js');
+const { isAppendOnlyEntity } = await import('../src/config.js');
 const { update } = await import('../src/mcp/tools/update.js');
 const { onboard } = await import('../src/mcp/tools/onboard.js');
 const { findEntityByName } = await import('../src/db/entities.js');
