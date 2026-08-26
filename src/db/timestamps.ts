@@ -29,7 +29,7 @@
  * zone-less string to a bare `new Date()`. `assertStoredSinceBound` closes the
  * gap between them — it holds the "already normalized" precondition at the two
  * functions that actually run the lexicographic SQL, so the contract is checked
- * rather than merely written down (D14).
+ * rather than merely written down (D15).
  */
 
 /** `YYYY-MM-DD` — a whole calendar day, no time part. */

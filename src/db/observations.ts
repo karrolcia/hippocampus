@@ -59,7 +59,7 @@ export interface SearchOptions {
    * spelling silently matches nothing (an ISO `T` sorts above every stored
    * row). Callers normalize via `normalizeSinceBound`. That precondition is
    * asserted, not merely documented: a violation throws rather than returning
-   * the empty set (D14).
+   * the empty set (D15).
    */
   since?: string;
   kind?: string;

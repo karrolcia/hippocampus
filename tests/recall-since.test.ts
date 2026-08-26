@@ -475,7 +475,7 @@ describe('both search legs apply the same bound', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The pre-normalized precondition, held structurally (D14). Until this landed,
+// The pre-normalized precondition, held structurally (D15). Until this landed,
 // an un-normalized bound reaching either function returned zero rows with no
 // error — and a test pinned that as expected behaviour, which meant the next
 // caller to forward a raw caller-supplied date would have reintroduced D13's
