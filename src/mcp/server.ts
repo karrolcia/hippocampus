@@ -101,7 +101,9 @@ export function createMcpServer(): McpServer {
     'Search memories by semantic similarity and keyword match. Returns relevant stored information ranked by relevance. ' +
       'Every response carries degraded: if true, the semantic leg failed and these are keyword-only matches that may be ' +
       'missing relevant memories — do not read the result as the full picture, and say so when reporting it. ' +
-      'degraded_reason names the cause. A semantic failure with no keyword matches is an error, never an empty result.',
+      'degraded_reason names the cause. A semantic failure with no keyword matches is an error, never an empty result. ' +
+      'spread: true has no keyword fallback and errors outright on a semantic failure — retry it with spread: false to ' +
+      'get the degraded keyword-only answer.',
     {
       query: z
         .string()

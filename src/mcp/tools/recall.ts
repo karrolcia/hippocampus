@@ -434,9 +434,16 @@ function formatWire(memories: MemoryResult[]): string {
   return sections.join('\n\n');
 }
 
-function formatIndex(memories: MemoryResult[]): RecallIndexResult {
+// Returns everything EXCEPT the degradation flags, deliberately. A formatter
+// cannot know whether the search that produced these rows ran whole, so letting
+// it name a value here would mean a plausible `degraded: false` default sitting
+// in the one format that has already lost the flag once — and the pre-fix shape
+// was a bare `return formatIndex(limited)`, which is exactly what a later
+// simplification would restore. Omitting it makes the call site the only place
+// the flag can come from.
+function formatIndex(memories: MemoryResult[]): Omit<RecallIndexResult, keyof DegradationFlags> {
   if (memories.length === 0) {
-    return { success: true, count: 0, entity_count: 0, text: '#I 0 results, 0 entities', degraded: false };
+    return { success: true, count: 0, entity_count: 0, text: '#I 0 results, 0 entities' };
   }
 
   const entityMap = new Map<string, { type: string | null; version_hash: string | null; obsCount: number; bestSimilarity: number }>();
@@ -465,7 +472,6 @@ function formatIndex(memories: MemoryResult[]): RecallIndexResult {
     count: memories.length,
     entity_count: sorted.length,
     text: lines.join('\n'),
-    degraded: false,
   };
 }
 
