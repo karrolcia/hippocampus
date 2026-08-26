@@ -4,6 +4,7 @@ import { getEmbeddingsByEntity, generateEmbedding, type StoredVector } from '../
 import { cosineSimilarity } from '../../embeddings/similarity.js';
 import { computeRedundancyScores } from '../../embeddings/subspace.js';
 import { isAppendOnlyEntity } from '../../config.js';
+import { parseStoredTimestamp } from '../../db/timestamps.js';
 
 export interface ConsolidateInput {
   entity?: string;
@@ -594,7 +595,7 @@ function sleepMode(input: ConsolidateInput): SleepResult {
 
   for (let i = 0; i < allVectors.length; i++) {
     const v = allVectors[i];
-    const createdAt = new Date(v.created_at).getTime();
+    const createdAt = parseStoredTimestamp(v.created_at);
     const age = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
     const redundancy = Math.round(scores[i] * 1000) / 1000;
     const recallCount = v.recall_count ?? 0;

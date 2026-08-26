@@ -5,7 +5,7 @@ import { getRelatedEntities } from '../../db/relationships.js';
 import { generateEmbedding, semanticSearchWithVector, getEmbeddingsByEntity, semanticSearch, type SemanticSearchResult } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
 import { isAppendOnlyEntity } from '../../config.js';
-import { normalizeSinceBound } from '../../db/timestamps.js';
+import { normalizeSinceBound, parseStoredTimestamp } from '../../db/timestamps.js';
 
 export const recallSchema = z.object({
   query: z
@@ -183,7 +183,7 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     // log entry is not out of date; it is the entry for that date.
     if (isAppendOnlyEntity(m.entity)) continue;
 
-    const createdAt = new Date(m.remembered_at).getTime();
+    const createdAt = parseStoredTimestamp(m.remembered_at);
     const ageDays = (now - createdAt) / (1000 * 60 * 60 * 24);
     if (ageDays <= STALE_AGE_DAYS) continue;
 
@@ -195,7 +195,7 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
       entityUpdateCache.set(m.entity, updatedAt);
     }
 
-    if (updatedAt && new Date(updatedAt).getTime() > createdAt) {
+    if (updatedAt && parseStoredTimestamp(updatedAt) > createdAt) {
       m.stale = true;
     }
   }
