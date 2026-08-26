@@ -115,9 +115,15 @@ export function createMcpServer(): McpServer {
         .string()
         .max(50)
         .optional()
-        .describe('Filter by entity type'),
+        .describe(
+          'Filter by entity type. Note: with spread: true, related entities ' +
+          'reached by spreading are NOT type-filtered — that is the point of ' +
+          'spreading, since related entities are usually a different type. ' +
+          'The since bound IS enforced on spread results.'
+        ),
       since: z
         .string()
+        .max(64)
         .optional()
         .describe(
           'Only return memories at or after this UTC time. Accepts "YYYY-MM-DD", ' +

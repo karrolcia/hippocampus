@@ -38,8 +38,8 @@ export function gatherEntityData(entities: Entity[]): EntityData[] {
  * The date half of a stored timestamp. `datetime('now')` writes
  * `YYYY-MM-DD HH:MM:SS`, so splitting on `'T'` returns the whole string
  * unchanged — these exports were printing full timestamps where a date was
- * intended. Older write paths left ISO values in the same columns, so both
- * separators have to be handled.
+ * intended. The column is TEXT with no format constraint and test fixtures
+ * backdate it with `toISOString()`, so both separators have to be handled.
  */
 function datePart(timestamp: string): string {
   return timestamp.split(/[T ]/)[0] ?? timestamp;

@@ -139,9 +139,13 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     // containing nothing new. Same fail-toward-absence family as the bound
     // itself (D13), in a shape that looks healthier than an empty result.
     //
-    // Compared as instants rather than strings: most rows carry the stored
-    // space form, but older write paths left ISO values in `created_at`, and a
-    // lexicographic `>=` over a mixed column is the exact trap D13 removed.
+    // Compared as instants rather than strings. `created_at` is TEXT with no
+    // format constraint — every write path in src goes through the schema
+    // default, but test fixtures backdate it with `toISOString()`, so ISO
+    // values do occur in the column — and a lexicographic `>=` over a mixed
+    // column is the exact trap D13 removed. The two SQL legs cannot do this
+    // (comparing instants there would cost `idx_observations_created`); in
+    // memory it is free.
     const sinceMs = since === undefined ? undefined : parseStoredTimestamp(since);
 
     for (const entityName of matchedEntityNames) {
@@ -155,6 +159,14 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
           if (seen.has(v.observation_id)) continue;
           // Apply kind filter if set
           if (input.kind && v.kind !== input.kind) continue;
+          // `type` is deliberately NOT applied here — spreading exists to reach
+          // related entities, which are usually of a different type (a person's
+          // projects), so filtering it would make `spread` + `type` inert. Pinned
+          // by "spread: true includes related entity observations across type
+          // boundary" in tests/new-features.test.ts. `since` is the opposite
+          // case and is enforced below: "what landed since X" means the same
+          // thing whichever entity it came from, and a temporal bound crossed
+          // by accident is how this whole entry started.
           // Drop only what is provably before the bound: an unparseable
           // timestamp is included and stays visible, rather than being dropped
           // where nobody would ever see it go.

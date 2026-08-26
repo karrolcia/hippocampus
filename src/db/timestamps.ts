@@ -146,9 +146,15 @@ export function normalizeSinceBound(input: string): string {
  *
  * `new Date(value)` would read the zone-less stored form as local time, making
  * every age computation depend on the host's UTC offset. Returns NaN for an
- * unparseable value, matching `Date.prototype.getTime`.
+ * unparseable value — including null and undefined — matching
+ * `Date.prototype.getTime`.
  */
-export function parseStoredTimestamp(value: string): number {
+export function parseStoredTimestamp(value: string | null | undefined): number {
+  // `created_at` carries no NOT NULL, so a null is reachable and must come back
+  // as NaN like any other unparseable value. Throwing here would take out the
+  // whole `recall` call or the whole `consolidate` sleep pass over one row —
+  // and would beat the NaN backstops at the call sites to the punch.
+  if (typeof value !== 'string') return NaN;
   const iso = value.trim().replace(' ', 'T');
   // Tolerate a value that already carries a zone — an ISO string from an older
   // write path is still a valid instant, and only a bare one needs the marker.
