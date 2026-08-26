@@ -141,6 +141,13 @@ export interface SemanticSearchResult {
 export interface SemanticSearchOptions {
   limit?: number;
   type?: string;
+  /**
+   * Lower bound on `created_at`, **already normalized** to the stored UTC form
+   * `YYYY-MM-DD HH:MM:SS` — the comparison below is lexicographic, so any other
+   * spelling silently matches nothing (an ISO `T` sorts above every stored
+   * row). Callers normalize via `normalizeSinceBound`; this layer has no error
+   * channel to reject a bad value through.
+   */
   since?: string;
   kind?: string;
 }

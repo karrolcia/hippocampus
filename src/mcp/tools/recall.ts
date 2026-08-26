@@ -5,6 +5,7 @@ import { getRelatedEntities } from '../../db/relationships.js';
 import { generateEmbedding, semanticSearchWithVector, getEmbeddingsByEntity, semanticSearch, type SemanticSearchResult } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
 import { isAppendOnlyEntity } from '../../config.js';
+import { normalizeSinceBound } from '../../db/timestamps.js';
 
 export const recallSchema = z.object({
   query: z
@@ -13,7 +14,12 @@ export const recallSchema = z.object({
     .max(500, 'Query must be 500 characters or less'),
   limit: z.coerce.number().min(1).max(50).default(10),
   type: z.string().max(50).optional(),
-  since: z.string().datetime().optional(),
+  // Deliberately unvalidated here: `normalizeSinceBound` in recall() below is
+  // the single validation point, and it accepts forms Zod's `.datetime()`
+  // rejects (the space-separated stored form) while rejecting nothing it
+  // accepts. Two validators disagreeing about the same field is how the
+  // documented ISO spelling ended up being the one that returned nothing.
+  since: z.string().optional(),
   kind: z.string().max(50).optional(),
   spread: z.boolean().default(false),
   format: z.enum(['full', 'compact', 'wire', 'index']).default('full'),
@@ -58,10 +64,16 @@ export interface RecallIndexResult {
 }
 
 export async function recall(input: RecallInput): Promise<RecallResult | RecallCompactResult | RecallIndexResult> {
+  // Normalize once, here, and feed both search paths from the same variable:
+  // the semantic and keyword halves compare `created_at >= ?` independently, so
+  // a bound normalized in only one of them would return half an answer. Throws
+  // on an unparseable value rather than filtering everything out (D13).
+  const since = input.since === undefined ? undefined : normalizeSinceBound(input.since);
+
   const searchOpts = {
     limit: input.limit,
     type: input.type,
-    since: input.since,
+    since,
     kind: input.kind,
   };
 
@@ -80,7 +92,7 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     query: input.query,
     limit: input.limit,
     type: input.type,
-    since: input.since,
+    since,
     kind: input.kind,
   });
 
