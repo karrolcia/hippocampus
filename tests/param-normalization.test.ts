@@ -210,7 +210,7 @@ describe('normalizeParams — unit', () => {
     for (const key of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
       assert.throws(
         () => normalizeParams('recall', { query: 'q', [key]: 'x' }),
-        new RegExp(`recall: unrecognized argument "${key.replace(/[$]/g, '')}"`),
+        new RegExp(`recall: unrecognized argument "${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`),
         `recall accepted prototype-chain key "${key}"`
       );
       assert.throws(
@@ -461,10 +461,10 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
   });
 
   test('CONTROL: the same recall call minus the stray key answers normally', async () => {
-    // The positive control for the test above. Without it, "recall rejects"
-    // could be measuring a broken fixture rather than the new strictness —
-    // and the whole point of this change is that the un-strict version of
-    // this call SUCCEEDS while quietly ignoring the bound.
+    // The positive control for the test above: the SAME call minus the stray
+    // key must answer normally. Without it, "recall rejects" could be
+    // measuring a broken fixture — a wrong DB path, a dead dispatch handler —
+    // rather than the new strictness.
     const server = createMcpServer();
     await callTool(server, 'remember', {
       content: 'strictness control fact about winter cycling',
@@ -563,6 +563,26 @@ describe('TOOL_PARAMS drift guard', () => {
         [...(_internal.TOOL_PARAMS[name] ?? [])].sort(),
         params,
         `TOOL_PARAMS.${name} drifted from the schema advertised by tools/list`
+      );
+    }
+  });
+
+  test('every strict tool is a real tool, with a consequence clause', () => {
+    // STRICT_TOOLS is the third hand-maintained map of tool names in this
+    // module and the only one whose drift fails SILENTLY: a typo'd key simply
+    // stops being strict, which is the silent widening this whole mechanism
+    // exists to close, reintroduced with a green suite. Today's two entries
+    // are pinned by their own behaviour tests; this is for the next one.
+    for (const [tool, consequence] of _internal.STRICT_TOOLS) {
+      assert.ok(
+        Object.hasOwn(_internal.TOOL_PARAMS, tool),
+        `STRICT_TOOLS names "${tool}", which is not a tool in TOOL_PARAMS — ` +
+          `it is silently non-strict`
+      );
+      assert.match(
+        consequence,
+        /^dropping it could change what gets \w+$/,
+        `STRICT_TOOLS["${tool}"] has no usable consequence clause`
       );
     }
   });

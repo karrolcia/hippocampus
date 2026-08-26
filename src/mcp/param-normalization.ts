@@ -72,7 +72,7 @@ const STRICT_TOOLS = new Map<string, string>([
   ['recall', 'dropping it could change what gets returned'],
 ]);
 
-// Every map below is a plain object literal, so a bare `obj[key]` or `key in
+// Every map above is a plain object literal, so a bare `obj[key]` or `key in
 // obj` also finds `Object.prototype`'s members — `constructor`, `toString`,
 // `__proto__`, `valueOf`, … Left unguarded that is not cosmetic: `constructor`
 // took the alias branch and skipped the strict throw entirely, and a tool
@@ -138,4 +138,4 @@ export function normalizeParams(toolName: string, args: unknown): unknown {
 }
 
 // Exposed for unit tests only — not part of the public module surface.
-export const _internal = { TOOL_PARAMS, SEMANTIC_ALIASES, toSnake, toCamel };
+export const _internal = { TOOL_PARAMS, SEMANTIC_ALIASES, STRICT_TOOLS, toSnake, toCamel };
