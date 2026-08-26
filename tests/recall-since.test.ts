@@ -503,11 +503,19 @@ describe('both search legs reject an un-normalized bound instead of matching not
     );
   });
 
-  test('the throw names the function that received it, not just the value', () => {
+  test('the throw names the function that received it, not just the value', async () => {
+    // Both legs, because the label is a copy-pasted string literal: a third
+    // search function that clones the assert line and keeps the wrong name
+    // sends the next debugger to the wrong file, and nothing else would notice.
+    const vector = await generateEmbedding(QUERY);
     assert.throws(
       () => searchObservations({ query: QUERY, limit: 50, since: 'not-a-date' }),
       /searchObservations/,
       'a precondition failure has to point at the call site to fix'
+    );
+    assert.throws(
+      () => semanticSearchWithVector(vector, { limit: 50, since: 'not-a-date' }),
+      /semanticSearchWithVector/
     );
   });
 
