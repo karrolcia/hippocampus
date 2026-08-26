@@ -56,6 +56,7 @@ const {
   generateEmbedding,
   semanticSearchWithVector,
 } = await import('../src/embeddings/embedder.js');
+const { createRelationship } = await import('../src/db/relationships.js');
 const { createMcpServer } = await import('../src/mcp/server.js');
 
 const QUERY = 'satellite';
@@ -162,6 +163,42 @@ describe('normalizeSinceBound accepts every documented spelling', () => {
     // `new Date().toISOString()` is the likeliest shape a scheduled agent sends.
     assert.equal(normalizeSinceBound('2026-08-25T10:36:55.123Z'), '2026-08-25 10:36:55');
     assert.equal(normalizeSinceBound('2026-08-25T10:36:55.123456789Z'), '2026-08-25 10:36:55');
+    // Precision beyond nanoseconds is still a valid instant, not a parse error.
+    assert.equal(normalizeSinceBound('2026-08-25T10:36:55.9999999999Z'), '2026-08-25 10:36:55');
+  });
+
+  test('a fraction with no seconds is rejected, not silently read as :00', () => {
+    // ISO reads the .5 in "10:36.5" as thirty seconds. Accepting it and
+    // discarding the fraction would move the bound by 30s without saying so.
+    assert.throws(() => normalizeSinceBound('2026-08-25T10:36.5'), /Invalid "since" value/);
+    assert.throws(() => normalizeSinceBound('2026-08-25T10:36.5Z'), /Invalid "since" value/);
+  });
+
+  test('an offset that pushes the instant out of range is rejected, not widened', () => {
+    // `Date` widens past year 9999 to an expanded form (`+010000-01-01`), which
+    // sorts BELOW every stored row — so it would match everything rather than
+    // erroring. The same bug as the one this module removes, sign flipped.
+    assert.throws(() => normalizeSinceBound('9999-12-31T23:00:00-05:00'), /Invalid "since" value/);
+    assert.throws(() => normalizeSinceBound('0000-01-01T00:00:00+05:00'), /Invalid "since" value/);
+  });
+
+  test('every accepted value comes back in the stored form, exactly', () => {
+    for (const input of [
+      '2026-08-25',
+      '2026-08-25 10:36:55',
+      '2026-08-25T10:36:55',
+      '2026-08-25T10:36:55.5Z',
+      '2026-08-25T13:36:55+03:00',
+      '2026-08-25T05:36:55-05:00',
+      '0001-01-01T00:00:00Z',
+      '9999-12-31T23:59:59Z',
+    ]) {
+      assert.match(
+        normalizeSinceBound(input),
+        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+        `${input} did not normalize to the stored form`
+      );
+    }
   });
 
   test('an offset is converted to UTC, not stripped', () => {
@@ -343,6 +380,75 @@ describe('recall(since) filters by time rather than by spelling', () => {
     await assert.rejects(() => recallSince('2026-13-01'), /Invalid "since" value/);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// spread: true. Spreading walks relationships and reads embeddings directly, so
+// it bypasses both SQL statements — `since` has to be re-applied by hand there.
+// Found in review of the first cut of this fix.
+// ---------------------------------------------------------------------------
+
+const SPREAD_ENTITY = 'ops:daily-log:test-recall-since-related';
+
+describe('spread: true honours the since bound', () => {
+  before(async () => {
+    // A related entity whose observations sit far outside any bound used here,
+    // linked to the seeded entity so spreading reaches them.
+    for (const suffix of ['delta', 'echo', 'foxtrot']) {
+      await remember({ entity: SPREAD_ENTITY, content: `satellite ground segment note ${suffix}` });
+    }
+    const db = getDatabase();
+    const related = findEntityByName(SPREAD_ENTITY);
+    const seeded = findEntityByName(ENTITY);
+    assert.ok(related && seeded, 'both entities should exist');
+    db.prepare('UPDATE observations SET created_at = ? WHERE entity_id = ?')
+      .run('2020-01-01 00:00:00', related!.id);
+    createRelationship(seeded!.id, related!.id, 'related_to');
+  });
+
+  async function spreadRecall(since: string | undefined, limit: number) {
+    return (await recall({
+      query: QUERY,
+      limit,
+      spread: true,
+      format: 'full',
+      ...(since === undefined ? {} : { since }),
+    } as Parameters<typeof recall>[0])) as FullRecall & {
+      memories: Array<{ observation_id: string; remembered_at: string }>;
+    };
+  }
+
+  test('spreading reaches the related entity at all (else this suite proves nothing)', async () => {
+    const result = await spreadRecall(undefined, 50);
+    assert.ok(
+      result.memories.some(m => m.remembered_at.startsWith('2020-01-01')),
+      'the fixture must actually spread, or the filter assertions below are vacuous'
+    );
+  });
+
+  test('out-of-window observations are not returned', async () => {
+    const result = await spreadRecall('2026-08-25 00:00:00', 50);
+    const stale = result.memories.filter(m => m.remembered_at < '2026-08-25');
+    assert.deepEqual(stale, [], 'spread results must respect the bound like every other leg');
+  });
+
+  test('the T form and the space form agree under spread too', async () => {
+    const t = await spreadRecall('2026-08-25T00:00:00', 50);
+    const space = await spreadRecall('2026-08-25 00:00:00', 50);
+    assert.deepEqual(idsOf(t), idsOf(space));
+    assert.ok(t.count > 0, 'and neither is empty');
+  });
+
+  test('spread with a bad since errors rather than quietly spreading unfiltered', async () => {
+    await assert.rejects(() => spreadRecall('not-a-date', 10), /Invalid "since" value/);
+  });
+
+  test('without a bound, spreading still reaches everything', async () => {
+    const result = await spreadRecall(undefined, 50);
+    assert.ok(result.count > SEEDED.length, 'no bound means no filtering');
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // Both SQL legs. recall() merges two independent queries; a bound normalized in

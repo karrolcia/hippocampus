@@ -34,6 +34,17 @@ export function gatherEntityData(entities: Entity[]): EntityData[] {
   return entitiesData;
 }
 
+/**
+ * The date half of a stored timestamp. `datetime('now')` writes
+ * `YYYY-MM-DD HH:MM:SS`, so splitting on `'T'` returns the whole string
+ * unchanged — these exports were printing full timestamps where a date was
+ * intended. Older write paths left ISO values in the same columns, so both
+ * separators have to be handled.
+ */
+function datePart(timestamp: string): string {
+  return timestamp.split(/[T ]/)[0] ?? timestamp;
+}
+
 export function exportMemories(input: ExportInput): ExportResult {
   // Resolve entity list
   let entities: Entity[];
@@ -200,7 +211,7 @@ export function formatMarkdown(entitiesData: EntityData[], allRelationships: Rel
 
     for (const obs of observations) {
       const meta: string[] = [];
-      if (obs.created_at) meta.push(obs.created_at.split('T')[0] ?? obs.created_at);
+      if (obs.created_at) meta.push(datePart(obs.created_at));
       if (obs.source) meta.push(`source: ${obs.source}`);
       const suffix = meta.length > 0 ? ` [${meta.join(', ')}]` : '';
       lines.push(`- ${obs.content}${suffix}`);
@@ -295,8 +306,8 @@ function formatObsidian(entitiesData: EntityData[], allRelationships: Relationsh
   }
 
   for (const { entity, observations } of entitiesData) {
-    const created = entity.created_at?.split('T')[0] ?? '';
-    const updated = entity.updated_at?.split('T')[0] ?? '';
+    const created = entity.created_at ? datePart(entity.created_at) : '';
+    const updated = entity.updated_at ? datePart(entity.updated_at) : '';
 
     const lines: string[] = [
       '---',

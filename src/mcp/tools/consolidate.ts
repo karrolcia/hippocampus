@@ -596,6 +596,13 @@ function sleepMode(input: ConsolidateInput): SleepResult {
   for (let i = 0; i < allVectors.length; i++) {
     const v = allVectors[i];
     const createdAt = parseStoredTimestamp(v.created_at);
+    // An unparseable timestamp yields NaN, and `NaN < ageDays` is false — so
+    // without this it would sail past the too-young guard below and land in
+    // `prune`, i.e. be proposed for deletion precisely because its age could
+    // not be established. Skip instead: unknown age is not evidence of dead
+    // weight. (The schema default always fills `created_at`, so this is a
+    // backstop, not a live path.)
+    if (!Number.isFinite(createdAt)) continue;
     const age = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
     const redundancy = Math.round(scores[i] * 1000) / 1000;
     const recallCount = v.recall_count ?? 0;

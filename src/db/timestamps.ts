@@ -41,7 +41,16 @@ const DATE_ONLY = /^(\d{4}-\d{2}-\d{2})$/;
  * canonical form out. RFC 3339 permits them explicitly.
  */
 const DATE_TIME =
-  /^(\d{4}-\d{2}-\d{2})[Tt ](\d{2}:\d{2})(:\d{2})?(?:\.\d{1,9})?(Z|z|[+-]\d{2}:?\d{2})?$/;
+  /^(\d{4}-\d{2}-\d{2})[Tt ](\d{2}:\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|z|[+-]\d{2}:?\d{2})?$/;
+
+/**
+ * The stored form, exactly. Every value this module hands back must match it —
+ * `Date` widens to an expanded year (`+010000-01-01`) outside 0000-9999, and
+ * such a string sorts BELOW every stored row, so it would match everything
+ * rather than erroring. Same class of bug as the one this module removes, with
+ * the sign flipped.
+ */
+const STORED_FORM = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 /** A zone suffix on an already-ISO string: `Z`, `+03:00`, `-0500`. */
 const HAS_ZONE = /(?:Z|z|[+-]\d{2}:?\d{2})$/;
@@ -111,7 +120,7 @@ export function normalizeSinceBound(input: string): string {
   if (!parts) throw sinceError(raw);
 
   const [, date, hhmm, ss, zone] = parts;
-  const seconds = ss ?? ':00';
+  const seconds = ss === undefined ? ':00' : `:${ss}`;
 
   // No zone: UTC by this schema's contract, so this is pure string surgery.
   // Routing it through `new Date()` would re-introduce the local-parse shift.
@@ -123,7 +132,13 @@ export function normalizeSinceBound(input: string): string {
   // Fractional seconds are truncated to the stored second resolution. On an
   // inclusive lower bound that can only widen the window by under a second —
   // it errs toward returning an extra row, never toward hiding one.
-  return toStoredForm(ms);
+  const stored = toStoredForm(ms);
+
+  // The zone-less branch validates by round-trip; this one cannot (the value is
+  // deliberately not what came in), so it checks the shape instead. An offset
+  // that pushes the instant outside 0000-9999 lands here, not in the database.
+  if (!STORED_FORM.test(stored)) throw sinceError(raw);
+  return stored;
 }
 
 /**

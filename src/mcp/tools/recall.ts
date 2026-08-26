@@ -130,6 +130,20 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
   if (input.spread && queryVector) {
     const matchedEntityNames = new Set(memories.map(m => m.entity));
 
+    // `since` has to gate these too. Spreading walks relationships and reads
+    // embeddings directly, so it never passes through either SQL statement and
+    // the bound applied there does not reach it. The consequence is worse than
+    // extra rows: the re-sort below is followed by a slice to `limit`, so
+    // damped out-of-window results can DISPLACE the in-window rows that were
+    // actually asked for — a filtered query returning a full-looking answer
+    // containing nothing new. Same fail-toward-absence family as the bound
+    // itself (D13), in a shape that looks healthier than an empty result.
+    //
+    // Compared as instants rather than strings: most rows carry the stored
+    // space form, but older write paths left ISO values in `created_at`, and a
+    // lexicographic `>=` over a mixed column is the exact trap D13 removed.
+    const sinceMs = since === undefined ? undefined : parseStoredTimestamp(since);
+
     for (const entityName of matchedEntityNames) {
       const entity = findEntityByName(entityName);
       if (!entity) continue;
@@ -141,6 +155,10 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
           if (seen.has(v.observation_id)) continue;
           // Apply kind filter if set
           if (input.kind && v.kind !== input.kind) continue;
+          // Drop only what is provably before the bound: an unparseable
+          // timestamp is included and stays visible, rather than being dropped
+          // where nobody would ever see it go.
+          if (sinceMs !== undefined && parseStoredTimestamp(v.created_at) < sinceMs) continue;
 
           const sim = cosineSimilarity(queryVector, v.vector);
           const recallBoost = 1 + SPREAD_ALPHA * Math.log(1 + (v.recall_count ?? 0));
