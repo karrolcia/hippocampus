@@ -12,9 +12,12 @@
  * wire contract — only inbound leniency is added.
  *
  * Mirrors the bash-side normalizer in ~/chief-of-staff/hippo-query.sh so the
- * same rules apply whether a caller hits the server through a custom bash
- * wrapper or directly via MCP. Both layers are idempotent: canonical inputs
- * pass through unchanged.
+ * same aliasing rules apply whether a caller hits the server through a custom
+ * bash wrapper or directly via MCP. Both layers are idempotent: canonical
+ * inputs pass through unchanged. Rejection is NOT mirrored and must not be —
+ * the bash layer forwards keys it does not recognize ("let the server reject
+ * it"), so for `STRICT_TOOLS` below this module is the only enforcement point
+ * on that path.
  */
 
 const TOOL_PARAMS: Record<string, Set<string>> = {
@@ -41,13 +44,40 @@ const SEMANTIC_ALIASES: Record<string, Record<string, string>> = {
   context: { entity: 'topic', entity_name: 'topic', entityName: 'topic' },
 };
 
-// Destructive tools where a silently-dropped argument can WIDEN the blast
-// radius: Zod strips unknown keys, so `forget({entity, contnet})` would fall
-// through to a whole-entity delete. For these tools an unrecognized argument
-// is a hard error, never a shrug. Error names the key only — never its value
-// (observation content must not leak into logs or error responses).
-const STRICT_TOOLS = new Set(['forget']);
+// Tools carrying a parameter whose silent loss WIDENS the operation. The
+// criterion is scope, not destructiveness: these tools take *restricting*
+// arguments, so one that Zod strips makes the call act on more than was asked
+// for — while the response still says `success`, describing an operation
+// nobody requested. One such parameter is enough to qualify a tool.
+//   forget — `observation_id` / `content` scope a delete to one observation;
+//     drop one and `forget({entity})` deletes the whole entity (2026-07-27,
+//     `skill:pseo-llm-visibility`).
+//   recall — `since` / `type` / `kind` restrict an answer; drop one and the
+//     caller gets history it did not ask for, indistinguishable from a genuine
+//     result set. A scheduled sweep asking "what landed since my last run"
+//     reads all of it as new (D14, the key-side mirror of D13's value-side
+//     bug).
+// Not every parameter on a strict tool restricts, and the exceptions are the
+// reason this says "carrying a parameter" rather than "every parameter":
+// `recall`'s `spread` WIDENS when present, so losing it fails safe (fewer
+// results, never a false "everything is new"); `format` only changes
+// rendering; `limit` cuts both ways against its default of 10. Strictness is
+// justified by the restricting params and costs nothing on the others.
+// The map value is the consequence clause quoted back to the caller — what
+// dropping the argument would have changed, in that tool's own terms.
+// The error names the key only, never its value (observation content and
+// search queries must not leak into logs or error responses).
+const STRICT_TOOLS = new Map<string, string>([
+  ['forget', 'dropping it could change what gets deleted'],
+  ['recall', 'dropping it could change what gets returned'],
+]);
 
+// Every map above is a plain object literal, so a bare `obj[key]` or `key in
+// obj` also finds `Object.prototype`'s members — `constructor`, `toString`,
+// `__proto__`, `valueOf`, … Left unguarded that is not cosmetic: `constructor`
+// took the alias branch and skipped the strict throw entirely, and a tool
+// named `constructor` resolved to the `Object` function and died on
+// `canonical.has is not a function`. Own-property checks only, everywhere.
 function toSnake(s: string): string {
   return s.replace(/(?<!^)([A-Z])/g, '_$1').toLowerCase();
 }
@@ -57,35 +87,50 @@ function toCamel(s: string): string {
   return parts[0] + parts.slice(1).map(p => p.charAt(0).toUpperCase() + p.slice(1)).join('');
 }
 
+/**
+ * Assigns an own data property. A plain `out[k] = v` with `k === '__proto__'`
+ * invokes the prototype setter instead of creating a key — so on a non-strict
+ * tool a caller could smuggle in `{"__proto__": {"topic": "..."}}` and have
+ * Zod read `topic` off the prototype as if it had been sent normally.
+ */
+function setOwn(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
 export function normalizeParams(toolName: string, args: unknown): unknown {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
-  const canonical = TOOL_PARAMS[toolName];
+  const canonical = Object.hasOwn(TOOL_PARAMS, toolName) ? TOOL_PARAMS[toolName] : undefined;
   if (!canonical) return args;
-  const aliases = SEMANTIC_ALIASES[toolName] ?? {};
+  const aliases = Object.hasOwn(SEMANTIC_ALIASES, toolName) ? SEMANTIC_ALIASES[toolName] : {};
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
     if (canonical.has(k)) {
-      out[k] = v;
-    } else if (k in aliases) {
-      out[aliases[k]] = v;
+      setOwn(out, k, v);
+    } else if (Object.hasOwn(aliases, k)) {
+      setOwn(out, aliases[k], v);
     } else {
       const snake = toSnake(k);
       const camel = toCamel(k);
       if (canonical.has(snake)) {
-        out[snake] = v;
+        setOwn(out, snake, v);
       } else if (canonical.has(camel)) {
-        out[camel] = v;
+        setOwn(out, camel, v);
       } else if (STRICT_TOOLS.has(toolName)) {
         // Truncate the key: a malformed call could put content-like text in
         // the key position, and this error echoes into client logs.
         const keyLabel = k.length > 50 ? `${k.slice(0, 50)}…` : k;
         throw new Error(
           `${toolName}: unrecognized argument "${keyLabel}". Refusing to proceed — ` +
-            `dropping it could change what gets deleted. ` +
+            `${STRICT_TOOLS.get(toolName)}. ` +
             `Accepted arguments: ${[...canonical].join(', ')}.`
         );
       } else {
-        out[k] = v; // unknown key — pass through, Zod strips it
+        setOwn(out, k, v); // unknown key — pass through, Zod strips it
       }
     }
   }
@@ -93,4 +138,4 @@ export function normalizeParams(toolName: string, args: unknown): unknown {
 }
 
 // Exposed for unit tests only — not part of the public module surface.
-export const _internal = { TOOL_PARAMS, SEMANTIC_ALIASES, toSnake, toCamel };
+export const _internal = { TOOL_PARAMS, SEMANTIC_ALIASES, STRICT_TOOLS, toSnake, toCamel };
