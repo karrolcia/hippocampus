@@ -50,8 +50,15 @@ export async function context(input: ContextInput): Promise<ContextResult> {
   if (!entity) {
     // Semantic fallback: search for memories about this topic
     // Require minimum similarity to avoid false matches on unrelated queries
+    //
+    // Deliberately uncaught (D14). This is the LAST leg of exact -> LIKE ->
+    // semantic, so unlike `recall` there is never a partial answer to return
+    // when it fails: the only other outcome is the `success: false, "No entity
+    // found for topic X"` below, which is a false claim if the leg that would
+    // have found it never ran. `recall` can honestly degrade because it still
+    // has keyword hits; here the degraded answer IS the misleading one.
     const SEMANTIC_THRESHOLD = 0.2;
-    const semanticResults = await semanticSearch(input.topic, { limit: 5 }).catch(() => []);
+    const semanticResults = await semanticSearch(input.topic, { limit: 5 });
     if (semanticResults.length > 0 && semanticResults[0].similarity >= SEMANTIC_THRESHOLD) {
       entity = findEntityById(semanticResults[0].entity_id) ?? undefined;
     }
