@@ -13,7 +13,8 @@
  */
 // Before every import. Node applies a runtime TZ change to Date, and on a UTC
 // host the local-vs-UTC assertions below would be vacuous. Helsinki is +02/+03
-// year-round, and `assertTzTookEffect` fails if this stops working.
+// year-round, and the 'TZ override took effect' test below fails if this
+// stops working.
 process.env.TZ = 'Europe/Helsinki';
 
 import { describe, test, before, after } from 'node:test';
@@ -71,10 +72,16 @@ describe('recall staleness is computed in UTC, not host local time', () => {
   const ENTITY = 'test:stale-boundary';
 
   before(async () => {
-    // Placed just INSIDE the 30-day window — 29d22h old. Reading the stored
-    // form as local time (+3 here) makes the instant look three hours earlier,
-    // i.e. 30d1h old, which tips it over the threshold. So `stale` under the
-    // correct UTC reading is false and under a bare `new Date()` is true.
+    // Placed just INSIDE the 30-day window — 29d23h old. Reading the stored form
+    // as local time makes the instant look one offset earlier, tipping it over
+    // the threshold: `stale` is false under the correct UTC reading and true
+    // under a bare `new Date()`.
+    //
+    // The cushion must be SMALLER than the host's UTC offset or the test stops
+    // discriminating. Helsinki is +03 in summer but +02 from late October to
+    // late March, so a 2h cushion would collapse the margin to the milliseconds
+    // of test-execution time for half the year — a test that quietly goes
+    // marginal on a calendar date. 1h leaves a full hour at the worst offset.
     await remember({ entity: ENTITY, content: 'boundary observation about arctic sea ice extent' });
     // A later write so the entity has newer information — the other half of the
     // stale condition, without which nothing is ever flagged.
@@ -90,7 +97,7 @@ describe('recall staleness is computed in UTC, not host local time', () => {
 
     const now = Date.now();
     db.prepare('UPDATE observations SET created_at = ? WHERE id = ?')
-      .run(storedForm(now - (30 * DAY - 2 * HOUR)), rows[0].id);
+      .run(storedForm(now - (30 * DAY - 1 * HOUR)), rows[0].id);
     db.prepare('UPDATE entities SET updated_at = ? WHERE id = ?')
       .run(storedForm(now), entity!.id);
   });
@@ -111,7 +118,7 @@ describe('recall staleness is computed in UTC, not host local time', () => {
     // Guards the fixture itself: if the age drifts outside 28-30 days the test
     // is no longer sitting on the boundary and proves nothing.
     const ageDays = (Date.now() - Date.parse(`${boundary!.remembered_at.replace(' ', 'T')}Z`)) / DAY;
-    assert.ok(ageDays > 29.5 && ageDays < 30, `fixture off the boundary: ${ageDays} days`);
+    assert.ok(ageDays > 29.9 && ageDays < 30, `fixture off the boundary: ${ageDays} days`);
 
     assert.notEqual(
       boundary!.stale,

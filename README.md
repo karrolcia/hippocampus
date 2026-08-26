@@ -401,7 +401,7 @@ You're responsible for uptime and physical security. See [SECURITY.md](SECURITY.
 | `check_version` | "Did anything change?" — pass an entity name + cached hash, get back yes/no. No embedding computation, pure metadata. |
 | `onboard` | Bootstrap memory from a new AI session. Returns structured extraction instructions the AI follows to capture user context. |
 
-`since` is a UTC lower bound and accepts `YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS`, or ISO-8601 with a zone (`2026-08-25T10:36:55Z`, `2026-08-25T13:36:55+03:00` — offsets are converted, not stripped). A value that can't be parsed is an **error**, never an empty result set: on a "what landed since my last run" query, silently returning nothing is indistinguishable from nothing having landed, and that's the one answer a memory server must never guess at.
+`since` is a UTC lower bound and accepts `YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS`, `2026-08-25T10:36:55` (no zone — read as UTC), and ISO-8601 with a zone (`2026-08-25T10:36:55Z`, `2026-08-25T13:36:55+03:00` — offsets are converted, not stripped). A value that can't be parsed is an **error**, never an empty result set: on a "what landed since my last run" query, silently returning nothing is indistinguishable from nothing having landed, and that's the one answer a memory server must never guess at.
 
 The AI calls these tools naturally. You don't manage memory manually — you just talk to your AI and it remembers.
 

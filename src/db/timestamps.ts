@@ -66,8 +66,9 @@ function sinceError(raw: string): Error {
   const echo = raw.length > MAX_ECHO ? `${raw.slice(0, MAX_ECHO)}…` : raw;
   return new Error(
     `Invalid "since" value: "${echo}". Expected a UTC date or datetime — ` +
-      `"YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", or ISO-8601 with a zone ` +
-      `("2026-08-25T10:36:55Z", "2026-08-25T13:36:55+03:00"). ` +
+      `"YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", "2026-08-25T10:36:55" (no zone, ` +
+      `read as UTC), or ISO-8601 with a zone ("2026-08-25T10:36:55Z", ` +
+      `"2026-08-25T13:36:55+03:00"). ` +
       `Rejected rather than returned as an empty result set.`
   );
 }

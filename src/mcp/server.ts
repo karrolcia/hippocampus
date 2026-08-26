@@ -127,9 +127,10 @@ export function createMcpServer(): McpServer {
         .optional()
         .describe(
           'Only return memories at or after this UTC time. Accepts "YYYY-MM-DD", ' +
-          '"YYYY-MM-DD HH:MM:SS", or ISO-8601 with a zone ("2026-08-25T10:36:55Z", ' +
-          '"2026-08-25T13:36:55+03:00"). An unparseable value is an error, never an ' +
-          'empty result set.'
+          '"YYYY-MM-DD HH:MM:SS", "2026-08-25T10:36:55" (no zone — read as UTC), ' +
+          'and ISO-8601 with a zone ("2026-08-25T10:36:55Z", ' +
+          '"2026-08-25T13:36:55+03:00"; offsets are converted, not stripped). ' +
+          'An unparseable value is an error, never an empty result set.'
         ),
       kind: z
         .string()

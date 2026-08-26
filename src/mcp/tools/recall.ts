@@ -14,11 +14,13 @@ export const recallSchema = z.object({
     .max(500, 'Query must be 500 characters or less'),
   limit: z.coerce.number().min(1).max(50).default(10),
   type: z.string().max(50).optional(),
-  // Deliberately unvalidated here: `normalizeSinceBound` in recall() below is
-  // the single validation point, and it accepts forms Zod's `.datetime()`
-  // rejects (the space-separated stored form) while rejecting nothing it
-  // accepts. Two validators disagreeing about the same field is how the
-  // documented ISO spelling ended up being the one that returned nothing.
+  // No FORMAT validation here: `normalizeSinceBound` in recall() below is the
+  // single arbiter of shape, and it accepts forms Zod's `.datetime()` rejects
+  // (the space-separated stored form) while rejecting nothing it accepts. Two
+  // validators disagreeing about a format is how the documented ISO spelling
+  // ended up being the one that returned nothing. The `.max(64)` on the MCP
+  // schema is not a second opinion about format — it is the input-length cap
+  // every other string param carries, and a length cap cannot disagree.
   since: z.string().optional(),
   kind: z.string().max(50).optional(),
   spread: z.boolean().default(false),

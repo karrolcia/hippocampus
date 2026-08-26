@@ -23,8 +23,9 @@
 // Must precede every import: Node applies a runtime TZ change to Date, and a
 // UTC host would make the parseStoredTimestamp assertions below vacuous —
 // local and UTC would agree and a regression would still pass. Helsinki is
-// +02/+03, so the two readings differ all year. `assertTzTookEffect` fails
-// loudly if this ever stops working rather than letting the suite go quiet.
+// +02/+03, so the two readings differ all year. The 'TZ override took effect'
+// test below fails loudly if this stops working, rather than letting the
+// suite go quiet.
 process.env.TZ = 'Europe/Helsinki';
 
 import { describe, test, before, after } from 'node:test';
