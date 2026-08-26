@@ -201,6 +201,57 @@ describe('normalizeParams — unit', () => {
     );
   });
 
+  test('prototype-chain key names hit the strict check like any other', () => {
+    // Every map in the module is a plain object literal, so `k in aliases`
+    // was true for Object.prototype's members: `constructor` took the ALIAS
+    // branch, skipped the strict throw, and landed as a key literally named
+    // "function Object() { [native code] }" for Zod to strip — a silently
+    // widened call, which is the one outcome STRICT_TOOLS exists to prevent.
+    for (const key of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      assert.throws(
+        () => normalizeParams('recall', { query: 'q', [key]: 'x' }),
+        new RegExp(`recall: unrecognized argument "${key.replace(/[$]/g, '')}"`),
+        `recall accepted prototype-chain key "${key}"`
+      );
+      assert.throws(
+        () => normalizeParams('forget', { entity: 'e', [key]: 'x' }),
+        /forget: unrecognized argument/,
+        `forget accepted prototype-chain key "${key}"`
+      );
+    }
+  });
+
+  test('a prototype-chain key on a NON-strict tool stays an own key, not a prototype write', () => {
+    // `out['__proto__'] = v` invokes the setter rather than creating a key, so
+    // this would hand Zod a `topic` it never received. Assert the own-key
+    // shape, not just the absence of a throw.
+    const injected = JSON.parse('{"__proto__":{"topic":"injected-entity"}}');
+    const out = normalizeParams('export', injected) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(out), ['__proto__'], 'key was not preserved as an own property');
+    assert.equal(
+      (out as { topic?: unknown }).topic,
+      undefined,
+      'a canonical param leaked in through the prototype'
+    );
+    assert.equal(Object.getPrototypeOf(out), Object.prototype, 'prototype was overwritten');
+    assert.equal(({} as { topic?: unknown }).topic, undefined, 'global prototype pollution');
+  });
+
+  test('a tool NAME from the prototype chain passes through instead of crashing', () => {
+    // TOOL_PARAMS['constructor'] resolved to the Object function — truthy, so
+    // the guard let it past and the next line died on `canonical.has is not a
+    // function`. The normalizer runs before SDK dispatch, so this replaced the
+    // SDK's clean "tool not found" with an opaque TypeError.
+    for (const name of ['constructor', 'toString', '__proto__', 'valueOf']) {
+      const input = { query: 'q' };
+      assert.deepEqual(
+        normalizeParams(name, input),
+        input,
+        `tool name "${name}" was not treated as unknown`
+      );
+    }
+  });
+
   test('unknown tool name passes args through unchanged', () => {
     const input = { entityName: 'x' };
     assert.deepEqual(normalizeParams('nonexistent_tool', input), input);
