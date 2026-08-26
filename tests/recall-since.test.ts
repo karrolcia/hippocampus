@@ -47,7 +47,7 @@ process.env.HIPPO_DB_PATH = DB_PATH;
 process.env.HIPPO_APPEND_ONLY_PREFIXES = 'ops:daily-log:';
 
 const { initDatabase, closeDatabase, getDatabase } = await import('../src/db/index.js');
-const { normalizeSinceBound, parseStoredTimestamp } = await import('../src/db/timestamps.js');
+const { normalizeSinceBound, parseStoredTimestamp, SINCE_CONTRACT_ERROR } = await import('../src/db/timestamps.js');
 const { remember } = await import('../src/mcp/tools/remember.js');
 const { recall } = await import('../src/mcp/tools/recall.js');
 const { searchObservations } = await import('../src/db/observations.js');
@@ -55,6 +55,7 @@ const { findEntityByName } = await import('../src/db/entities.js');
 const {
   getEmbeddingsByEntity,
   generateEmbedding,
+  semanticSearch,
   semanticSearchWithVector,
 } = await import('../src/embeddings/embedder.js');
 const { createRelationship } = await import('../src/db/relationships.js');
@@ -471,7 +472,6 @@ describe('both search legs apply the same bound', () => {
     assert.equal(t.length, 2, 'semantic leg must filter, not drop everything');
     assert.deepEqual(t.map(r => r.observation_id).sort(), space.map(r => r.observation_id).sort());
   });
-
 });
 
 // ---------------------------------------------------------------------------
@@ -483,8 +483,9 @@ describe('both search legs apply the same bound', () => {
 // lexicographic SQL; the bound's shape is now checked where it is used.
 // ---------------------------------------------------------------------------
 
+const UN_NORMALIZED = /un-normalized "since" bound/;
+
 describe('both search legs reject an un-normalized bound instead of matching nothing', () => {
-  const UN_NORMALIZED = /un-normalized "since" bound/;
 
   test('keyword leg throws on a raw ISO T bound', () => {
     assert.throws(
@@ -536,6 +537,62 @@ describe('both search legs reject an un-normalized bound instead of matching not
     const vector = await generateEmbedding(QUERY);
     assert.doesNotThrow(() => searchObservations({ query: QUERY, limit: 50 }));
     assert.doesNotThrow(() => semanticSearchWithVector(vector, { limit: 50 }));
+  });
+
+  test('a well-shaped bound that is not a real instant throws', () => {
+    // The shape is the proxy; the instant is the precondition. `2026-02-30`
+    // passes any reasonable regex and lexicographically excludes every late-Feb
+    // row while admitting March — a silently WRONG window, not an empty one.
+    // It is also what string surgery produces (JS months are zero-based), i.e.
+    // what a caller who skipped the normalizer would most plausibly build.
+    for (const bogus of ['2026-02-30 00:00:00', '2026-13-01 00:00:00', '2026-08-25 25:00:00', '0000-00-00 00:00:00']) {
+      assert.throws(
+        () => searchObservations({ query: QUERY, limit: 50, since: bogus }),
+        UN_NORMALIZED,
+        `${bogus} is well-shaped and meaningless — shape alone must not admit it`
+      );
+      assert.throws(() => normalizeSinceBound(bogus), /Invalid "since" value/, `and the normalizer rejects it too, so this is unreachable via recall()`);
+    }
+  });
+
+  test('a non-string bound yields the diagnostic, not a TypeError', () => {
+    // Types forbid it and zod rejects it at the MCP boundary, but a null lands
+    // on `.length` one line into the failure path if the echo is not defensive.
+    assert.throws(
+      () => searchObservations({ query: QUERY, limit: 50, since: null as unknown as string }),
+      UN_NORMALIZED
+    );
+  });
+
+  test('the contract error is named, so callers can tell it from a search failure', () => {
+    assert.throws(
+      () => searchObservations({ query: QUERY, limit: 50, since: 'nope' }),
+      (err: unknown) => (err as Error).name === SINCE_CONTRACT_ERROR,
+      'recall.ts keys its rethrow off the name, not the message text'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recall() degrades to an empty semantic leg when the embedder fails, and that
+// catch would otherwise swallow the assert. The rethrow there keys off the
+// error's NAME surviving the async boundary — which is what this pins. Being
+// honest about the limit: recall()'s own rethrow cannot be exercised, because
+// recall() normalizes before either leg sees the bound, so no un-normalized
+// value can reach it. Untestable and unreachable are the same fact here, and it
+// is the same fact as the assert itself: both exist for the next caller.
+// ---------------------------------------------------------------------------
+
+describe('a contract violation stays identifiable across the async leg', () => {
+  test('semanticSearch rejects, and the rejection is still named', async () => {
+    await assert.rejects(
+      () => semanticSearch(QUERY, { limit: 50, since: '2026-08-25T00:00:00' }),
+      (err: unknown) => {
+        assert.match((err as Error).message, UN_NORMALIZED);
+        assert.equal((err as Error).name, SINCE_CONTRACT_ERROR, 'recall.ts:90 keys its rethrow off this');
+        return true;
+      }
+    );
   });
 });
 

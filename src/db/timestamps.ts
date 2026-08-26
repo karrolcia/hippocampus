@@ -65,10 +65,16 @@ const HAS_ZONE = /(?:Z|z|[+-]\d{2}:?\d{2})$/;
  */
 const MAX_ECHO = 40;
 
+/** Quote a rejected value back, bounded. Tolerates a non-string: a runtime
+ *  `null` must produce the diagnostic, not a TypeError one line later. */
+function echo(value: unknown): string {
+  const raw = typeof value === 'string' ? value : String(value);
+  return raw.length > MAX_ECHO ? `${raw.slice(0, MAX_ECHO)}…` : raw;
+}
+
 function sinceError(raw: string): Error {
-  const echo = raw.length > MAX_ECHO ? `${raw.slice(0, MAX_ECHO)}…` : raw;
   return new Error(
-    `Invalid "since" value: "${echo}". Expected a UTC date or datetime — ` +
+    `Invalid "since" value: "${echo(raw)}". Expected a UTC date or datetime — ` +
       `"YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", "2026-08-25T10:36:55" (no zone, ` +
       `read as UTC), or ISO-8601 with a zone ("2026-08-25T10:36:55Z", ` +
       `"2026-08-25T13:36:55+03:00"). ` +
@@ -93,10 +99,14 @@ function toStoredForm(ms: number): string {
  * exceeds every stored row — the silent zero reborn one layer in. Round-trip
  * through `Date` (explicitly UTC) and require every component to survive.
  */
-function assertRealInstant(stored: string, raw: string): string {
+function isRealStoredInstant(stored: string): boolean {
   const ms = new Date(`${stored.replace(' ', 'T')}Z`).getTime();
-  if (Number.isNaN(ms)) throw sinceError(raw);
-  if (toStoredForm(ms) !== stored) throw sinceError(raw);
+  if (Number.isNaN(ms)) return false;
+  return toStoredForm(ms) === stored;
+}
+
+function assertRealInstant(stored: string, raw: string): string {
+  if (!isRealStoredInstant(stored)) throw sinceError(raw);
   return stored;
 }
 
@@ -146,6 +156,13 @@ export function normalizeSinceBound(input: string): string {
 }
 
 /**
+ * `Error.name` on a precondition failure from `assertStoredSinceBound`. Lets a
+ * caller distinguish "this search failed, degrade" from "this search was asked
+ * a malformed question, stop" without matching on message text.
+ */
+export const SINCE_CONTRACT_ERROR = 'SinceContractError';
+
+/**
  * Assert that a `since` bound arriving at a DB search function is already in
  * the stored form — the precondition `SearchOptions.since` documents.
  *
@@ -168,18 +185,30 @@ export function normalizeSinceBound(input: string): string {
  */
 export function assertStoredSinceBound(value: string | undefined, fn: string): void {
   if (value === undefined) return;
-  if (STORED_FORM.test(value)) return;
+  // Shape AND instant. Checking only the shape would let `2026-02-30 00:00:00`
+  // through — well-formed, meaningless, and lexicographically a bound that
+  // excludes every late-February row while admitting March: a silently wrong
+  // window rather than an empty one, which is the same defect wearing better
+  // clothes. It is also exactly what string surgery produces (JS months are
+  // zero-based, day arithmetic overruns), i.e. what a caller who skipped the
+  // normalizer would most plausibly build. The precondition is "came from
+  // normalizeSinceBound", so check what that guarantees, not a proxy for it.
+  if (STORED_FORM.test(value) && isRealStoredInstant(value)) return;
 
-  // Same truncation as sinceError: a date is not memory content, but the field
-  // takes an arbitrary string and the error must not become an unbounded one.
-  const echo = value.length > MAX_ECHO ? `${value.slice(0, MAX_ECHO)}…` : value;
-  throw new Error(
-    `Internal: ${fn} received an un-normalized "since" bound ("${echo}"). ` +
+  const error = new Error(
+    `Internal: ${fn} received an un-normalized "since" bound ("${echo(value)}"). ` +
       `It must already be the stored UTC form "YYYY-MM-DD HH:MM:SS" — ` +
       `\`created_at >= ?\` compares lexicographically, so any other spelling ` +
       `matches nothing and returns an empty result set with no error. ` +
       `Pass caller-supplied dates through normalizeSinceBound first.`
   );
+  // Named so a caller that degrades gracefully on search failure can still let
+  // this one through. `recall()` swallows semanticSearch rejections into an
+  // empty result set — correct for a model-load or embedding failure, fatal
+  // for this, which would land as the silent empty set the assert exists to
+  // prevent. See the rethrow in src/mcp/tools/recall.ts.
+  error.name = SINCE_CONTRACT_ERROR;
+  throw error;
 }
 
 /**

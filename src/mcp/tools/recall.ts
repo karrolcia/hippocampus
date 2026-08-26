@@ -5,7 +5,7 @@ import { getRelatedEntities } from '../../db/relationships.js';
 import { generateEmbedding, semanticSearchWithVector, getEmbeddingsByEntity, semanticSearch, type SemanticSearchResult } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
 import { isAppendOnlyEntity } from '../../config.js';
-import { normalizeSinceBound, parseStoredTimestamp } from '../../db/timestamps.js';
+import { normalizeSinceBound, parseStoredTimestamp, SINCE_CONTRACT_ERROR } from '../../db/timestamps.js';
 
 export const recallSchema = z.object({
   query: z
@@ -87,7 +87,17 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     queryVector = await generateEmbedding(input.query);
     semanticResults = semanticSearchWithVector(queryVector, searchOpts);
   } else {
-    semanticResults = await semanticSearch(input.query, searchOpts).catch(() => [] as SemanticSearchResult[]);
+    // Degrade to an empty semantic leg if the embedder fails (model load,
+    // dimension drift) — the keyword leg still answers. But a `since` contract
+    // violation must NOT degrade: it would surface as a thin result set that
+    // looks like a ranking quirk, i.e. the silent-empty failure the assert
+    // exists to prevent, reintroduced by the error handling around it. Today
+    // the keyword leg below throws on the same bound anyway; that masking is
+    // an accident of call order, not a guarantee, so this leg holds its own.
+    semanticResults = await semanticSearch(input.query, searchOpts).catch((err: unknown) => {
+      if ((err as Error | undefined)?.name === SINCE_CONTRACT_ERROR) throw err;
+      return [] as SemanticSearchResult[];
+    });
   }
 
   const keywordResults = searchObservations({
