@@ -472,12 +472,70 @@ describe('both search legs apply the same bound', () => {
     assert.deepEqual(t.map(r => r.observation_id).sort(), space.map(r => r.observation_id).sort());
   });
 
-  test('the raw T form still breaks the SQL — which is why normalization is the caller contract', () => {
-    // Guards the jsdoc on both SearchOptions interfaces. These functions have no
-    // error channel; if someone later passes a raw bound, this is the behaviour
-    // they get, and it must stay documented rather than rediscovered.
-    const raw = searchObservations({ query: QUERY, limit: 50, since: '2026-08-25T00:00:00' });
-    assert.equal(raw.length, 0, 'an un-normalized T bound still matches nothing at the SQL layer');
+});
+
+// ---------------------------------------------------------------------------
+// The pre-normalized precondition, held structurally (D14). Until this landed,
+// an un-normalized bound reaching either function returned zero rows with no
+// error — and a test pinned that as expected behaviour, which meant the next
+// caller to forward a raw caller-supplied date would have reintroduced D13's
+// silent zero with the suite's blessing. These two functions run the
+// lexicographic SQL; the bound's shape is now checked where it is used.
+// ---------------------------------------------------------------------------
+
+describe('both search legs reject an un-normalized bound instead of matching nothing', () => {
+  const UN_NORMALIZED = /un-normalized "since" bound/;
+
+  test('keyword leg throws on a raw ISO T bound', () => {
+    assert.throws(
+      () => searchObservations({ query: QUERY, limit: 50, since: '2026-08-25T00:00:00' }),
+      UN_NORMALIZED,
+      'the T form sorts above every stored row — silently, which is the whole defect'
+    );
+  });
+
+  test('semantic leg throws on a raw ISO T bound', async () => {
+    const vector = await generateEmbedding(QUERY);
+    assert.throws(
+      () => semanticSearchWithVector(vector, { limit: 50, since: '2026-08-25T00:00:00' }),
+      UN_NORMALIZED
+    );
+  });
+
+  test('the throw names the function that received it, not just the value', () => {
+    assert.throws(
+      () => searchObservations({ query: QUERY, limit: 50, since: 'not-a-date' }),
+      /searchObservations/,
+      'a precondition failure has to point at the call site to fix'
+    );
+  });
+
+  test('an empty bound throws rather than silently dropping the filter', () => {
+    // `if (options.since)` treats '' as "no bound" and returns everything — an
+    // unset caller variable read as "everything is new". Same lie, opposite sign.
+    assert.throws(
+      () => searchObservations({ query: QUERY, limit: 50, since: '' }),
+      UN_NORMALIZED
+    );
+  });
+
+  test('a partial date throws — it is a truncation bug, not a prefix', () => {
+    assert.throws(() => searchObservations({ query: QUERY, limit: 50, since: '2026-08' }), UN_NORMALIZED);
+  });
+
+  test('normalizeSinceBound output always satisfies the assertion', () => {
+    // The two are a pair: if normalization could emit a shape the assertion
+    // rejects, every recall with a bound would throw in production.
+    for (const input of ['2026-08-25', '2026-08-25T00:00:00', '2026-08-25T13:36:55+03:00', '2026-08-25 10:36:55.9Z']) {
+      const bound = normalizeSinceBound(input);
+      assert.doesNotThrow(() => searchObservations({ query: QUERY, limit: 50, since: bound }), `rejected its own output for ${input}`);
+    }
+  });
+
+  test('no bound at all is still no bound', async () => {
+    const vector = await generateEmbedding(QUERY);
+    assert.doesNotThrow(() => searchObservations({ query: QUERY, limit: 50 }));
+    assert.doesNotThrow(() => semanticSearchWithVector(vector, { limit: 50 }));
   });
 });
 

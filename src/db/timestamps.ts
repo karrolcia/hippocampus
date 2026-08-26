@@ -26,7 +26,10 @@
  *
  * So: `normalizeSinceBound` for any date a caller supplies, and
  * `parseStoredTimestamp` for any timestamp read back out. Neither hands a
- * zone-less string to a bare `new Date()`.
+ * zone-less string to a bare `new Date()`. `assertStoredSinceBound` closes the
+ * gap between them — it holds the "already normalized" precondition at the two
+ * functions that actually run the lexicographic SQL, so the contract is checked
+ * rather than merely written down (D14).
  */
 
 /** `YYYY-MM-DD` — a whole calendar day, no time part. */
@@ -140,6 +143,43 @@ export function normalizeSinceBound(input: string): string {
   // that pushes the instant outside 0000-9999 lands here, not in the database.
   if (!STORED_FORM.test(stored)) throw sinceError(raw);
   return stored;
+}
+
+/**
+ * Assert that a `since` bound arriving at a DB search function is already in
+ * the stored form — the precondition `SearchOptions.since` documents.
+ *
+ * `normalizeSinceBound` is the single normalization point and `recall()` is
+ * today's only caller, so this can only fire on a *programmer* error: a second
+ * caller that forwards a caller-supplied date straight through. That is worth a
+ * throw rather than a comment, because the failure it prevents is invisible —
+ * an un-normalized bound does not error, it matches nothing, and a filter that
+ * silently returns the empty set is indistinguishable from an empty database
+ * (D13). Refusing is all this does; it deliberately does not normalize, which
+ * would absorb the caller's bug and split the one normalization point in two.
+ *
+ * `undefined` means "no bound" and passes. `""` does not: it is almost always
+ * an unset variable interpolated by a caller, and it would otherwise fall
+ * through the `if (options.since)` guards below as "no filter at all" — a full
+ * result set read as "everything is new", the same lie in the other direction.
+ *
+ * @param fn the calling function's name, so the throw names the site to fix.
+ * @throws if `value` is anything other than `YYYY-MM-DD HH:MM:SS` or undefined.
+ */
+export function assertStoredSinceBound(value: string | undefined, fn: string): void {
+  if (value === undefined) return;
+  if (STORED_FORM.test(value)) return;
+
+  // Same truncation as sinceError: a date is not memory content, but the field
+  // takes an arbitrary string and the error must not become an unbounded one.
+  const echo = value.length > MAX_ECHO ? `${value.slice(0, MAX_ECHO)}…` : value;
+  throw new Error(
+    `Internal: ${fn} received an un-normalized "since" bound ("${echo}"). ` +
+      `It must already be the stored UTC form "YYYY-MM-DD HH:MM:SS" — ` +
+      `\`created_at >= ?\` compares lexicographically, so any other spelling ` +
+      `matches nothing and returns an empty result set with no error. ` +
+      `Pass caller-supplied dates through normalizeSinceBound first.`
+  );
 }
 
 /**
