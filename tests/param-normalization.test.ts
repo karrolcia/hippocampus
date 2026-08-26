@@ -10,7 +10,7 @@ process.env.HIPPO_PASSPHRASE = 'test-passphrase-for-param-normalization';
 process.env.HIPPO_DB_PATH = DB_PATH;
 
 const { initDatabase, closeDatabase } = await import('../src/db/index.js');
-const { normalizeParams } = await import('../src/mcp/param-normalization.js');
+const { normalizeParams, _internal } = await import('../src/mcp/param-normalization.js');
 const { createMcpServer } = await import('../src/mcp/server.js');
 
 before(() => {
@@ -108,10 +108,86 @@ describe('normalizeParams — unit', () => {
     );
   });
 
-  test('unknown keys pass through on non-strict tools (server rejects, not us)', () => {
+  test('unknown keys pass through on non-strict tools (Zod strips them downstream)', () => {
+    // `export` is deliberately non-strict: its optional params narrow the
+    // export, but "give me everything" is its documented default shape, so a
+    // dropped filter returns a superset the caller can still see in full
+    // rather than an answer that looks scoped and is not. Nothing *rejects*
+    // the stray key — Zod strips it silently, which is exactly why the
+    // widening tools are in STRICT_TOOLS instead.
     assert.deepEqual(
-      normalizeParams('recall', { query: 'q', not_a_real_param: 'x' }),
-      { query: 'q', not_a_real_param: 'x' }
+      normalizeParams('export', { format: 'json', not_a_real_param: 'x' }),
+      { format: 'json', not_a_real_param: 'x' }
+    );
+  });
+
+  test('recall: canonical params pass through unchanged (idempotent, still strict)', () => {
+    const input = {
+      query: 'daily log session',
+      type: 'operations',
+      since: '2026-08-25',
+      kind: 'fact',
+      limit: 10,
+      spread: false,
+      format: 'wire',
+    };
+    assert.deepEqual(normalizeParams('recall', input), input);
+  });
+
+  test('unknown keys on recall throw — a dropped filter silently widens the answer', () => {
+    // The key-side mirror of D13 (D14). `from` is the name a caller reaches
+    // for instead of `since`; Zod strips it, the bound never applies, and the
+    // response is all of history with success: true — which a scheduled sweep
+    // asking "what landed since my last run" reads as entirely new.
+    assert.throws(
+      () => normalizeParams('recall', { query: 'q', from: '2026-08-25' }),
+      /recall: unrecognized argument "from"/
+    );
+  });
+
+  test('recall strict error names the key and the accepted args, never the value', () => {
+    // The error echoes into client logs, and on `recall` the stripped value is
+    // frequently a search query. Assert the value is absent, not just that the
+    // key is present — the leak would otherwise pass every other test here.
+    let message = '';
+    try {
+      normalizeParams('recall', { query: 'q', notes: 'Karolina PhD atmospheric physics' });
+      assert.fail('expected recall to reject an unrecognized argument');
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    assert.match(message, /unrecognized argument "notes"/);
+    assert.ok(
+      !message.includes('atmospheric physics'),
+      `strict error leaked the argument value: ${message}`
+    );
+    for (const param of ['query', 'limit', 'type', 'since', 'kind', 'spread', 'format']) {
+      assert.ok(message.includes(param), `accepted-args list is missing "${param}": ${message}`);
+    }
+  });
+
+  test('strict error truncates an over-long key rather than echoing it whole', () => {
+    // A malformed call can put content-like text in the KEY position, which
+    // the "names the key only" rule would otherwise wave straight through.
+    const longKey = 'x'.repeat(200);
+    assert.throws(
+      () => normalizeParams('recall', { query: 'q', [longKey]: 1 }),
+      (err: Error) => {
+        assert.ok(!err.message.includes(longKey), 'full over-long key was echoed');
+        assert.match(err.message, /unrecognized argument "x{50}…"/);
+        return true;
+      }
+    );
+  });
+
+  test('strict consequence clause is per-tool, not forget-specific', () => {
+    assert.throws(
+      () => normalizeParams('forget', { entity: 'x', bogus: 1 }),
+      /what gets deleted/
+    );
+    assert.throws(
+      () => normalizeParams('recall', { query: 'q', bogus: 1 }),
+      /what gets returned/
     );
   });
 
@@ -323,5 +399,140 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
       () => callTool(server, 'forget', { entity: 'x', not_a_real_param: 'x' }),
       /forget: unrecognized argument "not_a_real_param"/
     );
+  });
+
+  test('unknown param on recall surfaces as a loud error through server dispatch', async () => {
+    const server = createMcpServer();
+    await assert.rejects(
+      () => callTool(server, 'recall', { query: 'anything', from: '2026-08-25' }),
+      /recall: unrecognized argument "from"/
+    );
+  });
+
+  test('CONTROL: the same recall call minus the stray key answers normally', async () => {
+    // The positive control for the test above. Without it, "recall rejects"
+    // could be measuring a broken fixture rather than the new strictness —
+    // and the whole point of this change is that the un-strict version of
+    // this call SUCCEEDS while quietly ignoring the bound.
+    const server = createMcpServer();
+    await callTool(server, 'remember', {
+      content: 'strictness control fact about winter cycling',
+      entity: 'paramnorm-recall-control',
+    });
+    const result = await callTool(server, 'recall', { query: 'winter cycling', limit: 5 });
+    assert.equal(result.isError, false, `canonical recall should not error: ${result.text}`);
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.success, true);
+  });
+
+  test('canonical recall with every optional filter still works end-to-end', async () => {
+    // Strictness must not cost the real callers anything. These are the exact
+    // params the scheduled sweeps send (briefing.sh, nightly-session-check,
+    // knowledge-harvest, scripts/sync-agents.ts) — all canonical, all through
+    // the same dispatch path that now rejects strays.
+    const server = createMcpServer();
+    await callTool(server, 'remember', {
+      content: 'canonical filter fact about espresso grind settings',
+      entity: 'paramnorm-recall-filters',
+      type: 'operations',
+      kind: 'fact',
+    });
+    const result = await callTool(server, 'recall', {
+      query: 'espresso grind',
+      type: 'operations',
+      kind: 'fact',
+      since: '2020-01-01',
+      limit: 10,
+      spread: false,
+      format: 'wire',
+    });
+    assert.equal(result.isError, false, `filtered recall should not error: ${result.text}`);
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.success, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drift guard: TOOL_PARAMS must match the schemas the server actually
+// advertises. This is what makes STRICT_TOOLS safe to extend.
+// ---------------------------------------------------------------------------
+
+type ToolsListRequest = { jsonrpc: '2.0'; id: number; method: 'tools/list'; params: Record<string, never> };
+type ToolsListResult = { tools: { name: string; inputSchema?: { properties?: Record<string, unknown> } }[] };
+
+async function listTools(server: ReturnType<typeof createMcpServer>): Promise<ToolsListResult> {
+  const handlers = (server as unknown as {
+    server: { _requestHandlers: Map<string, (req: ToolsListRequest, extra: unknown) => Promise<ToolsListResult>> };
+  }).server._requestHandlers;
+  const handler = handlers.get('tools/list');
+  if (!handler) throw new Error('tools/list handler missing — SDK internals changed');
+  return handler(
+    { jsonrpc: '2.0', id: ++callId, method: 'tools/list', params: {} },
+    {
+      signal: new AbortController().signal,
+      sendNotification: async () => {},
+      sendRequest: async () => ({}),
+    }
+  );
+}
+
+describe('TOOL_PARAMS drift guard', () => {
+  // TOOL_PARAMS is a hand-maintained copy of every tool's parameter list, and
+  // nothing links it to the registered schemas. Drift breaks BOTH directions:
+  // a param added to a tool but missing here silently stops normalizing (the
+  // camelCase form gets stripped) and — on a strict tool — turns a valid,
+  // documented call into a hard error; a param removed from a tool but left
+  // here keeps a dead name accepted. `tools/list` is the wire contract every
+  // client's model actually reads, so compare against that rather than the
+  // Zod objects behind it.
+  test('every advertised tool has an entry, with exactly its advertised params', async () => {
+    const server = createMcpServer();
+    const { tools } = await listTools(server);
+    assert.ok(tools.length > 0, 'tools/list returned nothing — dispatch regression');
+
+    const advertised = new Map<string, string[]>();
+    for (const tool of tools) {
+      const properties = tool.inputSchema?.properties ?? {};
+      assert.ok(
+        Object.keys(properties).length > 0,
+        `${tool.name}: tools/list advertised no properties — the ZodEffects/` +
+          `EMPTY_OBJECT_JSON_SCHEMA regression (see CLAUDE.md gotcha)`
+      );
+      advertised.set(tool.name, Object.keys(properties).sort());
+    }
+
+    assert.deepEqual(
+      Object.keys(_internal.TOOL_PARAMS).sort(),
+      [...advertised.keys()].sort(),
+      'TOOL_PARAMS tool names drifted from the tools the server advertises'
+    );
+
+    for (const [name, params] of advertised) {
+      assert.deepEqual(
+        [...(_internal.TOOL_PARAMS[name] ?? [])].sort(),
+        params,
+        `TOOL_PARAMS.${name} drifted from the schema advertised by tools/list`
+      );
+    }
+  });
+
+  test('every semantic alias resolves to a real param on its own tool', async () => {
+    // An alias pointing at a name the tool no longer has would rewrite a valid
+    // key into one Zod strips — and on a strict tool the alias branch runs
+    // BEFORE the strict check, so the failure would be silent, not loud.
+    for (const [tool, aliases] of Object.entries(_internal.SEMANTIC_ALIASES)) {
+      const canonical = _internal.TOOL_PARAMS[tool];
+      assert.ok(canonical, `SEMANTIC_ALIASES names unknown tool "${tool}"`);
+      for (const [from, to] of Object.entries(aliases)) {
+        assert.ok(
+          canonical.has(to),
+          `${tool}: alias "${from}" targets "${to}", which is not one of its params`
+        );
+        assert.ok(
+          !canonical.has(from),
+          `${tool}: alias "${from}" shadows a real param of the same name`
+        );
+      }
+    }
   });
 });

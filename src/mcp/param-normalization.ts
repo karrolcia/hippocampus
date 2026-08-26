@@ -12,9 +12,12 @@
  * wire contract — only inbound leniency is added.
  *
  * Mirrors the bash-side normalizer in ~/chief-of-staff/hippo-query.sh so the
- * same rules apply whether a caller hits the server through a custom bash
- * wrapper or directly via MCP. Both layers are idempotent: canonical inputs
- * pass through unchanged.
+ * same aliasing rules apply whether a caller hits the server through a custom
+ * bash wrapper or directly via MCP. Both layers are idempotent: canonical
+ * inputs pass through unchanged. Rejection is NOT mirrored and must not be —
+ * the bash layer forwards keys it does not recognize ("let the server reject
+ * it"), so for `STRICT_TOOLS` below this module is the only enforcement point
+ * on that path.
  */
 
 const TOOL_PARAMS: Record<string, Set<string>> = {
@@ -41,12 +44,26 @@ const SEMANTIC_ALIASES: Record<string, Record<string, string>> = {
   context: { entity: 'topic', entity_name: 'topic', entityName: 'topic' },
 };
 
-// Destructive tools where a silently-dropped argument can WIDEN the blast
-// radius: Zod strips unknown keys, so `forget({entity, contnet})` would fall
-// through to a whole-entity delete. For these tools an unrecognized argument
-// is a hard error, never a shrug. Error names the key only — never its value
-// (observation content must not leak into logs or error responses).
-const STRICT_TOOLS = new Set(['forget']);
+// Tools where a silently-dropped argument WIDENS the operation. The criterion
+// is scope, not destructiveness: on these tools every optional parameter
+// NARROWS what the call acts on, so an argument Zod strips broadens it — and
+// the response still says `success`, describing an operation nobody asked for.
+//   forget — `observation_id` / `content` scope a delete to one observation;
+//     drop one and `forget({entity})` deletes the whole entity (2026-07-27,
+//     `skill:pseo-llm-visibility`).
+//   recall — `since` / `type` / `kind` / `limit` scope an answer; drop one and
+//     the caller gets history it did not ask for, indistinguishable from a
+//     genuine result set. A scheduled sweep asking "what landed since my last
+//     run" reads all of it as new (D14, the key-side mirror of D13's
+//     value-side bug).
+// The map value is the consequence clause quoted back to the caller — what
+// dropping the argument would have changed, in that tool's own terms.
+// The error names the key only, never its value (observation content and
+// search queries must not leak into logs or error responses).
+const STRICT_TOOLS = new Map<string, string>([
+  ['forget', 'dropping it could change what gets deleted'],
+  ['recall', 'dropping it could change what gets returned'],
+]);
 
 function toSnake(s: string): string {
   return s.replace(/(?<!^)([A-Z])/g, '_$1').toLowerCase();
@@ -81,7 +98,7 @@ export function normalizeParams(toolName: string, args: unknown): unknown {
         const keyLabel = k.length > 50 ? `${k.slice(0, 50)}…` : k;
         throw new Error(
           `${toolName}: unrecognized argument "${keyLabel}". Refusing to proceed — ` +
-            `dropping it could change what gets deleted. ` +
+            `${STRICT_TOOLS.get(toolName)}. ` +
             `Accepted arguments: ${[...canonical].join(', ')}.`
         );
       } else {

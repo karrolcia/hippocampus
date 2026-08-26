@@ -221,9 +221,13 @@ describe('forget rejects unknown arguments loudly', () => {
   });
 
   test('non-strict tools still pass unknown keys through', () => {
+    // Was `recall`, which joined forget in STRICT_TOOLS under D14 — its
+    // optional params are all narrowing filters, so a stripped one silently
+    // widens the answer. `export` stays non-strict: returning a superset is
+    // its documented default rather than a scoped answer in disguise.
     assert.deepEqual(
-      normalizeParams('recall', { query: 'q', bogus: 1 }),
-      { query: 'q', bogus: 1 }
+      normalizeParams('export', { format: 'json', bogus: 1 }),
+      { format: 'json', bogus: 1 }
     );
   });
 });
