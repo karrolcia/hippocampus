@@ -296,7 +296,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'merge',
-    'Merge multiple observations into one. Atomic operation: provide merged text + list of observation IDs. Creates the merged observation, deletes the originals, handles embeddings. Use after consolidate to act on clusters.',
+    'Merge multiple observations into one. Atomic operation: provide merged text + list of observation IDs. Creates the merged observation, deletes the originals, handles embeddings. Use after consolidate to act on clusters. Carries `kind` and `importance` through from the sources (importance takes the max). REFUSES — without deleting anything — when the sources carry two or more different kinds: merge each kind separately, or update() them to a common kind first. A null kind is no opinion, not a third kind.',
     {
       observation_ids: z
         .array(z.string())
