@@ -14,6 +14,18 @@
 - **ChatGPT Developer Mode — end-to-end test.** `remember` + `recall` never tested via ChatGPT's custom MCP integration — the blocker for the "universal memory across all platforms" claim on the README. Highest leverage for the flagship claim.
 - **R3 + R4 — scoring fields in recall `full` + `context`; resolve `last_recalled_at`.** The embedder layer strips `recall_count`/`importance` and never SELECTs `last_recalled_at` — a maintained-but-unconsumed column. Wire it into scoring, or retire it + drop the CLAUDE.md "foundation for decay" claim.
 
+- [ ] **`merge()` strips `kind` and resets `importance` — the compress path is unsafe for kinded entities** [session] — `src/mcp/tools/merge.ts:46` calls `createObservation(entityId, input.content, source ?? undefined)`, but the signature is `(entityId, content, source?, importance = 1.0, kind?)` (`src/db/observations.ts:22-28`), so every merge writes `kind -> null` and `importance -> 1.0` regardless of its sources. Same defect that was fixed for `update()` in the Unreleased CHANGELOG; `merge()` never got it.
+  - **Helps (infra -> downstream):** the curated tier is what every AI session reads. `skill:*` depends on the `kind: "trigger"` / `kind: "content"` split the global CLAUDE.md skill-retrieval protocol is built on; `block:*` on `kind: "idea"` / `"seed"`. A merge collapses those into one kindless blob, so the next session loads the wrong half or nothing — silently, since the text survives and only the classification dies.
+  - **Learn:** a merge on a kinded entity round-trips its `kind` (regression test), and `consolidate`'s compress proposals stop shipping under a standing hold. If real digests turn out to carry multi-kind groups routinely (>1 per pass), the reject-vs-majority call below gets revisited rather than left as a default.
+  - **Why:** found by the 2026-08-09 dreaming pass, which measured the blast radius — all 15 compress groups in that digest and all 1,025 compress candidates, i.e. the entire change-type, not one entity. It retroactively invalidated both compress proposals from 2026-07-22, including `course:product-sense`, whose *own* observation documents the `kind` convention a merge would erase.
+  - **Where:** `src/mcp/tools/merge.ts:46`; signature `src/db/observations.ts:22-28`; regression test alongside `tests/observation-scoping.test.ts`; CHANGELOG Unreleased -> Fixed.
+  - **Load:** `~/chief-of-staff/dreaming/2026-08-09.md` item 1 (evidence + prevalence counts); the Unreleased `update` kind-carryover entry; `gotcha_hippo_write_hazards` memory.
+  - **Locked:** uniform-kind sources carry `kind` and `importance` through, mirroring the `update()` fix.
+  - **Decide first (not locked):** the multi-kind case — reject the merge, or take the majority kind. The dreaming pass raises its own counter-assumption: if a merged observation is a genuinely *new* synthesis that should not inherit its sources' classification, the code is working as designed and only the two held proposals need re-scoping. Settle this before writing the fix.
+  - **Assumes:** no caller depends on the current kind-clearing (grep `~/chief-of-staff/` prompts + `consolidate` output shapes before building). Adjacent semantics: the `onboard.ts` importance-ceiling chip under Housekeeping touches the same field — check they don't collide.
+  - **Done:** a merge of uniform-kind sources preserves `kind` and carries `importance`; the multi-kind case behaves per the decision above; regression test covers both; CHANGELOG names `merge` beside `update`.
+  - **Hold regardless of the fix:** the two `merge` commands from `dreaming/2026-07-22.md` items 2-3 stay held — a multi-kind group is ambiguous even with carry-through.
+
 ## Next
 - **Phase 3 — cross-runtime execution proof.** The "Claude Code down → ChatGPT picks up" demo: disable the launchd chief-of-staff agent for a day, confirm ChatGPT / Claude.ai reads the agent entity and produces the same briefing.
 - **Phase 4 — Ollama / local-LLM fallback.** Local LLM reads agent tasks; skips tasks whose `requires` can't be met locally (mail, calendar) without erroring — degraded but alive.
@@ -44,7 +56,7 @@
 
 ## Later (feature ideas — not scheduled)
 - Session provenance on recall (`source_platform` per observation; schema V8).
-- Consistency metrics (build on `consolidate mode: "contradictions"`).
+- **Contradiction detection that finds conflicts, not near-duplicates.** `consolidate mode: "contradictions"` currently behaves as a near-duplicate detector — it surfaces similar text, so a genuine conflict reads the same as a restatement. Fixture on hand: global `CLAUDE.md`'s "append `|| true` to any `tee` pipeline in a `log()` function" vs the chief-of-staff note "`|| true` clobbers `PIPESTATUS` ... still fine for `log()`" — same subject, one blanket rule and one carve-out, and only the second silo holds the reconciliation. A detector worth the name flags that pair. **Prerequisite:** the material has to be *in* Hippo — today the engineering-knowledge tier lives in `~/.claude/CLAUDE.md` plus 405 auto-memory files across 18 cwd-keyed silos (worktrees get their own), none of it visible to `consolidate`. That ingest is ops-side (`~/chief-of-staff/ROADMAP.md` #19), not here.
 - Agent-task recall shorthand (revisit once Phase 2 bootstrap is in real use).
 - Timezone handling across runtimes (UTC fallback, unimplemented).
 - Failed-task surfacing (checkpoint `last_status: failed` → next runtime mentions it).
