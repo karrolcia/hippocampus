@@ -39,11 +39,12 @@ import {
   existsSync,
   statSync,
   copyFileSync,
+  realpathSync,
 } from "node:fs";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // ───────────────────────────────────────── Config ─────────────────────────────────────────
 
@@ -443,9 +444,17 @@ export function describeDegradation(index: RecallIndex): string | null {
     : "semantic search was unavailable on the server";
 }
 
-async function cmdPull(dryRun: boolean, allowDegraded: boolean): Promise<void> {
-  const client = new HippoClient(ENDPOINT, getToken());
-  await client.init();
+export async function cmdPull(
+  dryRun: boolean,
+  allowDegraded: boolean,
+  // Injectable so the degraded REFUSAL below can be pinned by a test. Without
+  // this the guard was deletable while the suite stayed green — the helper that
+  // decides `degraded` was covered, the branch that acts on it was not, which is
+  // the repo's own "a guard test needs a positive control" lesson in miniature.
+  injectedClient?: HippoClient
+): Promise<void> {
+  const client = injectedClient ?? new HippoClient(ENDPOINT, getToken());
+  if (!injectedClient) await client.init();
 
   const index = await client.call<RecallIndex>("recall", {
     query: "agent scheduled task",
@@ -489,6 +498,7 @@ async function cmdPull(dryRun: boolean, allowDegraded: boolean): Promise<void> {
 
   let written = 0;
   let failed = 0;
+  let skipped = 0;
   for (const entity of entityNames) {
     try {
       const taskId = entity.slice("agent:".length);
@@ -511,8 +521,15 @@ async function cmdPull(dryRun: boolean, allowDegraded: boolean): Promise<void> {
         observations.find((o) => looksLikeSchedule(o.content))
       )?.content;
 
-      if (!instruction) {
+        if (!instruction) {
+        // Counted, not just warned. `continue` used to bypass both counters, so
+        // an entity whose instruction observation had been lost produced
+        // `Materialized 0/1 agents to disk` and exit 0 — a sync that
+        // materialized nothing, reporting success. The caller asked for this
+        // agent on disk and did not get it; that is a failure, whatever the
+        // cause sits in.
         console.warn(`⚠ ${entity}: no 'instruction' observation, skipping`);
+        skipped++;
         continue;
       }
       const schedule = scheduleRaw ? parseScheduleYaml(scheduleRaw) : null;
@@ -556,9 +573,13 @@ async function cmdPull(dryRun: boolean, allowDegraded: boolean): Promise<void> {
   if (dryRun) {
     console.log("\n(dry run — no files written)");
   } else {
-    console.log(`\nMaterialized ${written}/${entityNames.length} agents to disk${failed ? ` (${failed} failed)` : ""}`);
+    const notes = [
+      failed ? `${failed} failed` : null,
+      skipped ? `${skipped} skipped` : null,
+    ].filter(Boolean).join(", ");
+    console.log(`\nMaterialized ${written}/${entityNames.length} agents to disk${notes ? ` (${notes})` : ""}`);
   }
-  if (failed > 0) process.exit(1);
+  if (failed > 0 || skipped > 0) process.exit(1);
 }
 
 async function cmdList(): Promise<void> {
@@ -619,9 +640,27 @@ async function main(): Promise<void> {
 // (which would demand a token and hit the network). The fixes above are on a
 // write path that reports its own success, which is exactly the kind that needs
 // to stay regression-testable.
+// Deliberately NOT byte-identical to the same gate in src/index.ts, which
+// compares `import.meta.url` to `pathToFileURL(process.argv[1])`. Node resolves
+// symlinks for `import.meta.url` but NOT for `process.argv[1]`, so behind a
+// symlinked path the two disagree and the gate reads false. For the server that
+// is nearly harmless — nothing starts listening and you notice at once. For a
+// sync CLI it means exit 0 with no output, which is indistinguishable from
+// "nothing to sync": precisely the silent-success failure this file was just
+// fixed to stop producing. Reachable if the repo is ever checked out under a
+// symlinked path — a symlinked ~/GitHub, an external volume, or a CI scratch
+// dir under /tmp (on macOS /tmp is itself a symlink to /private/tmp).
+function resolveRealPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 const isMain =
   process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+  resolveRealPath(process.argv[1]) === resolveRealPath(fileURLToPath(import.meta.url));
 
 if (isMain) {
   main().catch((err) => {

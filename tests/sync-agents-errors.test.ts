@@ -19,7 +19,7 @@
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { HippoClient, describeDegradation } = await import('../scripts/sync-agents.ts');
+const { HippoClient, describeDegradation, cmdPull } = await import('../scripts/sync-agents.ts');
 
 // A tool result as the MCP layer actually shapes it: the JSON-RPC envelope the
 // script's `fetch` unwraps, with `result.content[0].text` holding the tool's
@@ -120,5 +120,48 @@ describe('describeDegradation reads D16 flag', () => {
     // asymmetry with the server's own "absence is not the all-clear" rule is
     // intentional — there the field is guaranteed present, here it is not.
     assert.equal(describeDegradation({ success: true, count: 1, text: '#I 1' }), null);
+  });
+});
+
+describe('pull refuses a degraded index; the guard itself is pinned', () => {
+  // The predicate being covered is not the same as the branch being covered.
+  // Deleting the refusal from cmdPull left the rest of this file green, which is
+  // the shape the repo's own "a guard test needs a positive control" note warns
+  // about: what must be asserted is that pull STOPS, not that a boolean maps to
+  // a string. A fake client keeps this off the network and off the disk — the
+  // refusal fires before the write loop, and both controls below use an index
+  // with no `agent:` lines so they return at "no agent entities" without
+  // touching ~/.claude/scheduled-tasks.
+  function fakeClient(index: Record<string, unknown>) {
+    return { call: async () => index } as never;
+  }
+  const DEGRADED = {
+    success: true, count: 1, text: '#DEGRADED semantic search unavailable\n#I 0 results, 0 entities',
+    degraded: true, degraded_reason: 'Error: model load failed',
+  };
+  const HEALTHY = { success: true, count: 0, text: '#I 0 results, 0 entities', degraded: false };
+
+  test('a degraded index stops the pull before anything is written', async () => {
+    await assert.rejects(
+      () => cmdPull(true, false, fakeClient(DEGRADED)),
+      (err: Error) => {
+        assert.match(err.message, /refusing to pull from a degraded index/);
+        // The cause has to travel: "it failed" without "why" sends the operator
+        // to the wrong file.
+        assert.match(err.message, /model load failed/);
+        assert.match(err.message, /--allow-degraded/, 'the message must name the escape hatch');
+        return true;
+      }
+    );
+  });
+
+  test('--allow-degraded lets it proceed — the guard is conditional, not a blanket throw', async () => {
+    // Positive control. Without it, a refusal that fired unconditionally would
+    // also pass the test above.
+    await cmdPull(true, true, fakeClient(DEGRADED));
+  });
+
+  test('a healthy index is never refused', async () => {
+    await cmdPull(true, false, fakeClient(HEALTHY));
   });
 });
