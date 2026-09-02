@@ -431,9 +431,12 @@ export interface RecallIndex {
  *
  * 50 is not a tuning choice — it is `recall`'s schema maximum
  * (`limit: z.number().min(1).max(50)` in src/mcp/server.ts), so it cannot be
- * raised. And it bounds OBSERVATIONS, not entities: each agent carries two or
+ * raised. And it bounds OBSERVATIONS, not entities: each agent carries one to
  * three (instruction, schedule, sometimes checkpoint), which makes the real
- * ceiling roughly 16-25 agents. Currently 22 observations across 14 agents.
+ * ceiling roughly 16-25 agents. Measured on prod 2026-09-02: 14 agents holding
+ * 27 observations, of which this recall returns 22 — the other five are already
+ * being dropped by the similarity floor, which is a different failure and the
+ * reason `describeUnderCount` exists.
  */
 export const PULL_RECALL_LIMIT = 50;
 
@@ -449,19 +452,30 @@ export const PULL_RECALL_LIMIT = 50;
  * `false`. It is treated as "unknown, assume healthy" rather than asserted,
  * because this script has to keep working against a server it did not deploy.
  */
+export function describeDegradation(index: RecallIndex): string | null {
+  if (index.degraded !== true) return null;
+  return index.degraded_reason
+    ? `semantic search was unavailable on the server — ${index.degraded_reason}`
+    : "semantic search was unavailable on the server";
+}
+
 /**
- * Whether the enumeration was cut off by the limit rather than by running out
- * of agents. A sibling of `describeDegradation` rather than a widening of it:
- * that function's `string | null` contract is pinned by D17's tests, and the
- * two failures want different dispositions.
+ * Whether the enumeration was cut off by the limit. A sibling of
+ * `describeDegradation` rather than a widening of it: that function's
+ * `string | null` contract and its "an absent flag is healthy" branch are pinned
+ * by D17's tests, and the two conditions want different dispositions.
  *
- * Sound because `recall` applies no similarity floor —
- * `semanticSearchWithVector` scores every row matching `type: "agent"` and
- * slices to the limit — so a count BELOW the limit really is everything, and a
- * count that reaches it means rows fell off the end. Which rows is decided by
- * relevance to the query string, so the agents lost are arbitrary from the
- * caller's point of view but perfectly deterministic from the server's: the
- * same ones vanish on every run.
+ * NOT a completeness proof, and an earlier draft of this comment claimed it was.
+ * `count` is what survived `recall`'s own `SIMILARITY_THRESHOLD = 0.15` filter
+ * (`src/mcp/tools/recall.ts`), applied AFTER the search slices to the limit — so
+ * a count below the limit does NOT mean the enumeration was exhaustive. It means
+ * only that the slice was not full. Measured on prod 2026-09-02: `export`
+ * reports 27 observations across 14 agents, the same recall reports 22 — five
+ * already dropped by the floor. No agent was lost only because each dropped
+ * observation had a sibling above the line, and four agents currently hold
+ * exactly one observation. `verifyAgainstExport` below is the check that
+ * actually holds; this one stays because it is free, fails closed on a missing
+ * `count`, and names a specific fault with a specific fix.
  */
 export function describeSaturation(index: RecallIndex, limit: number): string | null {
   if (index.count < limit) return null;
@@ -474,11 +488,54 @@ export function describeSaturation(index: RecallIndex, limit: number): string | 
   );
 }
 
-export function describeDegradation(index: RecallIndex): string | null {
-  if (index.degraded !== true) return null;
-  return index.degraded_reason
-    ? `semantic search was unavailable on the server — ${index.degraded_reason}`
-    : "semantic search was unavailable on the server";
+/** `export`'s envelope. Only the count is read; the payload is deliberately ignored. */
+interface ExportEnvelope {
+  success: boolean;
+  entity_count: number;
+  observation_count: number;
+}
+
+/**
+ * The independent completeness oracle, and the only check here that can catch an
+ * agent going missing.
+ *
+ * `recall` is a relevance-ranked SEARCH: it embeds the query, drops everything
+ * under a similarity floor, and returns what is left. Using it to enumerate is
+ * asking "which agents resemble the phrase 'agent scheduled task'", and an agent
+ * whose single observation falls under the floor is simply not in the answer —
+ * with `success: true`, `degraded: false`, and a count that looks fine.
+ * `export` does not search: it goes through `listEntities({type, limit: 10000})`,
+ * a database listing with no embeddings and no floor, so its `entity_count` is
+ * the ground truth the search result can be checked against.
+ *
+ * Kept as a cross-check rather than replacing the enumeration outright, because
+ * swapping the primitive would leave D17's degraded refusal on `pull` guarding
+ * nothing — `export` has no `degraded` flag to report — and that is a landed,
+ * reviewed decision this change does not get to quietly retire.
+ *
+ * An entity with zero observations would sit in `export` and never in `recall`,
+ * which reads here as a refusal. That is the right answer, not a false positive:
+ * an agent with no instruction is one `pull` cannot materialize, and D17 already
+ * treats that as a failure. None exist today (minimum is 1).
+ */
+export function describeUnderCount(expected: number, found: number): string | null {
+  // Fails closed on a server that answers `export` without a count, and says
+  // which of the two checks could not run. Left implicit this still refused —
+  // `n >= undefined` is false — but reported "export reports undefined", which
+  // sends the operator looking for a missing agent that does not exist.
+  if (!Number.isFinite(expected)) {
+    return (
+      `export did not report an entity_count (got ${JSON.stringify(expected)}), so the agent ` +
+      `index cannot be checked for completeness`
+    );
+  }
+  if (found >= expected) return null;
+  return (
+    `the agent index lists ${found} agent(s) but export reports ${expected} in Hippocampus — ` +
+    `${expected - found} agent(s) are missing from the index. recall is a similarity search and ` +
+    `drops observations below its 0.15 floor, so an agent can be absent from it while existing ` +
+    `on the server. Enumerate with export({format: "json", type: "agent"}) to see them all.`
+  );
 }
 
 export async function cmdPull(
@@ -549,6 +606,21 @@ export async function cmdPull(
   const entityNames = Array.from(
     index.text.matchAll(/^(agent:[\w.-]+)\|/gm)
   ).map((m) => m[1]);
+
+  // Before the empty-list branch below, deliberately. A floor that removed every
+  // agent lands there, and "No agent entities found in Hippocampus." is the most
+  // confident possible way to say the opposite of the truth.
+  const inventory = await client.call<ExportEnvelope>("export", {
+    format: "wire",
+    type: "agent",
+  });
+  const underCount = describeUnderCount(inventory.entity_count, entityNames.length);
+  if (underCount) {
+    // Unconditional, like saturation and for the same reason: --allow-degraded
+    // accepts a search that could not run fully, and this is a search that ran
+    // fine and still left agents out. Nothing about the flag makes that recoverable.
+    throw new Error(`refusing to pull from an incomplete index: ${underCount}`);
+  }
 
   if (entityNames.length === 0) {
     console.log("No agent entities found in Hippocampus.");

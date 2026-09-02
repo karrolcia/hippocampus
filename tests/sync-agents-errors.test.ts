@@ -132,8 +132,18 @@ describe('pull refuses a degraded index; the guard itself is pinned', () => {
   // refusal fires before the write loop, and both controls below use an index
   // with no `agent:` lines so they return at "no agent entities" without
   // touching ~/.claude/scheduled-tasks.
-  function fakeClient(index: Record<string, unknown>) {
-    return { call: async () => index } as never;
+  // Answers `export` as well as `recall`: D18 added an independent completeness
+  // oracle to cmdPull (recall is a similarity search and can silently omit an
+  // agent, so its count is checked against export's uncapped listEntities).
+  // These fixtures carry no `agent:` lines, so the matching truth is 0 entities.
+  // The D17 assertions below are unchanged.
+  function fakeClient(index: Record<string, unknown>, exportEntityCount = 0) {
+    return {
+      call: async (name: string) =>
+        name === 'export'
+          ? { success: true, entity_count: exportEntityCount, observation_count: 0 }
+          : index,
+    } as never;
   }
   const DEGRADED = {
     success: true, count: 1, text: '#DEGRADED semantic search unavailable\n#I 0 results, 0 entities',

@@ -26,7 +26,8 @@
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { describeSaturation, cmdPull, PULL_RECALL_LIMIT } = await import('../scripts/sync-agents.ts');
+const { describeSaturation, describeUnderCount, cmdPull, PULL_RECALL_LIMIT } =
+  await import('../scripts/sync-agents.ts');
 
 const HEALTHY_TEXT = '#I 0 results, 0 entities';
 
@@ -34,10 +35,20 @@ function index(over: Record<string, unknown> = {}) {
   return { success: true, count: 0, text: HEALTHY_TEXT, degraded: false, ...over };
 }
 
-/** Answers `recall` with one index and `context` with whatever the test wants. */
+/**
+ * Answers `recall` with one index, `export` with an entity count, and `context`
+ * with whatever the test wants.
+ *
+ * The `recall` branch asserts the limit actually SENT. Without that the drift
+ * the constant exists to prevent is invisible: a review mutation that changed
+ * cmdPull's request to `limit: 25` while the guard kept comparing against 50
+ * left this suite fully green, and in that state a 25-observation truncated
+ * index passes straight through into a silent partial pull.
+ */
 function fakeClient(
   idx: Record<string, unknown>,
-  contextFor?: (topic: string) => unknown
+  contextFor?: (topic: string) => unknown,
+  exportEntityCount?: number
 ) {
   return {
     call: async (name: string, args: Record<string, unknown>) => {
@@ -45,9 +56,34 @@ function fakeClient(
         if (!contextFor) throw new Error('unexpected context call');
         return contextFor(String(args.topic));
       }
+      if (name === 'export') {
+        return {
+          success: true,
+          entity_count: exportEntityCount ?? countAgentLines(idx),
+          observation_count: 0,
+        };
+      }
+      assert.equal(
+        args.limit,
+        PULL_RECALL_LIMIT,
+        'cmdPull must request exactly the limit its saturation guard compares against'
+      );
       return idx;
     },
   } as never;
+}
+
+/** Resolves every topic to itself, so the name assertion is satisfied. */
+function echoContext(topic: string) {
+  return {
+    success: true,
+    entity: { name: topic, observations: [{ content: 'do the thing', kind: 'instruction' }] },
+  };
+}
+
+/** How many `agent:` lines the fixture index carries — the oracle's default. */
+function countAgentLines(idx: Record<string, unknown>): number {
+  return Array.from(String(idx.text ?? '').matchAll(/^agent:[\w.-]+\|/gm)).length;
 }
 
 /**
@@ -120,7 +156,7 @@ describe('pull refuses a truncated index, and no flag buys past it', () => {
 
   test('a saturated index stops the pull', async () => {
     await assert.rejects(
-      () => cmdPull(true, false, fakeClient(SATURATED)),
+      () => cmdPull(true, false, fakeClient(SATURATED, echoContext)),
       (err: Error) => {
         assert.match(err.message, /refusing to pull from a truncated index/);
         assert.match(err.message, /export\(/, 'the message must name the way forward');
@@ -135,24 +171,124 @@ describe('pull refuses a truncated index, and no flag buys past it', () => {
     // loss of named agents with the limit already at the server's maximum, so
     // there is nothing to accept it FOR.
     await assert.rejects(
-      () => cmdPull(true, true, fakeClient(SATURATED)),
+      () => cmdPull(true, true, fakeClient(SATURATED, echoContext)),
       /refusing to pull from a truncated index/
     );
   });
 
   test('saturation is checked before degradation, so the unbypassable one wins', async () => {
+    // Must run with allowDegraded FALSE. With it true the degraded gate only
+    // warns, so both orderings throw the same truncation error and the test
+    // proves nothing — a review mutation that moved the saturation block after
+    // the degraded gate kept this suite green. With it false the order decides
+    // which message the operator gets, and the wrong one tells them to re-run
+    // with --allow-degraded, which is the single instruction this must not give.
     const both = index({ count: PULL_RECALL_LIMIT, degraded: true, degraded_reason: 'Error: boom' });
     await assert.rejects(
-      () => cmdPull(true, true, fakeClient(both)),
-      /truncated/,
-      'with --allow-degraded set, the degraded check passes and saturation must still fire'
+      () => cmdPull(true, false, fakeClient(both, echoContext)),
+      (err: Error) => {
+        assert.match(err.message, /truncated/);
+        assert.doesNotMatch(
+          err.message,
+          /--allow-degraded/,
+          'a truncated index must never be reported as something a flag can accept'
+        );
+        return true;
+      }
     );
+  });
+
+  test('CONTROL: with --allow-degraded the same fixture still refuses on truncation', async () => {
+    const both = index({ count: PULL_RECALL_LIMIT, degraded: true, degraded_reason: 'Error: boom' });
+    await assert.rejects(() => cmdPull(true, true, fakeClient(both, echoContext)), /truncated/);
   });
 
   test('CONTROL: an unsaturated index is never refused', async () => {
     // Without this, a refusal that fired unconditionally would pass every
     // assertion above.
-    await cmdPull(true, false, fakeClient(index({ count: 3 })));
+    await cmdPull(true, false, fakeClient(index({ count: 3 }), echoContext));
+  });
+});
+
+describe('the export cross-check catches an agent the search dropped', () => {
+  // This is the check that actually holds. `recall` filters at
+  // SIMILARITY_THRESHOLD = 0.15 AFTER slicing, so a count under the limit does
+  // not mean the enumeration was exhaustive — measured on prod, export sees 27
+  // observations where the same recall sees 22. `export` goes through
+  // listEntities with no embeddings and no floor, so its entity_count is ground
+  // truth to check the search against.
+  const TWO_LISTED = index({
+    count: 4,
+    text: '#I 4 results, 2 entities\nagent:alpha|agent|2 obs|0.31\nagent:beta|agent|2 obs|0.29',
+  });
+
+  test('fewer agents in the index than exist on the server is reported', () => {
+    const msg = describeUnderCount(3, 2);
+    assert.ok(msg);
+    assert.match(msg, /lists 2 agent\(s\) but export reports 3/);
+    assert.match(msg, /1 agent\(s\) are missing/);
+  });
+
+  test('CONTROL: equal counts are not reported', () => {
+    assert.equal(describeUnderCount(2, 2), null);
+  });
+
+  test('CONTROL: more in the index than export is not reported', () => {
+    // Only under-count is loss. Over-count would mean export is the stale one,
+    // which is not a reason to refuse a pull.
+    assert.equal(describeUnderCount(2, 3), null);
+  });
+
+  test('a server that reports no entity_count fails closed, and names which check could not run', () => {
+    const msg = describeUnderCount(undefined as unknown as number, 2);
+    assert.ok(msg, 'an unusable oracle must not read as an all-clear');
+    assert.match(msg, /did not report an entity_count/);
+    assert.doesNotMatch(msg, /agent\(s\) are missing/, 'it must not invent a missing agent');
+  });
+
+  test('pull refuses when the server holds an agent the index never showed', async () => {
+    await assert.rejects(
+      () => cmdPull(true, false, fakeClient(TWO_LISTED, echoContext, 3)),
+      (err: Error) => {
+        assert.match(err.message, /refusing to pull from an incomplete index/);
+        assert.match(err.message, /0\.15 floor/, 'the message must name the actual cause');
+        return true;
+      }
+    );
+  });
+
+  test('--allow-degraded does not buy past it either', async () => {
+    await assert.rejects(
+      () => cmdPull(true, true, fakeClient(TWO_LISTED, echoContext, 3)),
+      /refusing to pull from an incomplete index/
+    );
+  });
+
+  test('an index emptied entirely refuses instead of reporting "no agents found"', async () => {
+    // The worst cell: every agent filtered out lands in the empty-list branch,
+    // whose message states the exact opposite of the truth with total confidence.
+    // The oracle is checked before that branch precisely for this.
+    await assert.rejects(
+      () => cmdPull(true, false, fakeClient(index({ count: 0 }), echoContext, 14)),
+      /refusing to pull from an incomplete index/
+    );
+  });
+
+  test('CONTROL: a genuinely empty server still reports no agents, not a refusal', async () => {
+    // Without this, an oracle that refused whenever the index was empty would
+    // pass the test above while breaking the legitimate empty case.
+    await cmdPull(true, false, fakeClient(index({ count: 0 }), echoContext, 0));
+  });
+
+  test('CONTROL: matching counts pass through untouched', async () => {
+    // contextFor echoes the requested topic, so the name assertion is satisfied
+    // for both agents and this control isolates the oracle. (Returning a fixed
+    // name here instead makes the SECOND agent trip the name guard, which exits
+    // the process rather than failing an assertion — worth the explicitness.)
+    const code = await runCapturingExit(() =>
+      cmdPull(true, false, fakeClient(TWO_LISTED, echoContext, 2))
+    );
+    assert.equal(code, undefined, 'a complete, name-matched index must not exit non-zero');
   });
 });
 
