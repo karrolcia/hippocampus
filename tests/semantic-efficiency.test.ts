@@ -48,6 +48,31 @@ describe('Compact recall format', () => {
     assert.ok(!('memories' in result), 'Compact result should not have memories field');
   });
 
+  // The healthy-path half of D16's contract. It cannot live in
+  // tests/recall-degraded.test.ts: that file poisons the model load for its
+  // whole process, and the embedding pipeline is a cached singleton, so one
+  // process cannot hold both a working and a broken embedder. `degraded` is
+  // asserted PRESENT and false rather than merely falsy — an absent field is
+  // indistinguishable from a server that never had one, which is the exact
+  // ambiguity the always-present flag exists to remove (same reason `remember`
+  // carries `replaced: false`).
+  test('a healthy recall carries degraded: false in every format', async () => {
+    const full = await recall({ query: 'atmospheric physics Helsinki MCP', format: 'full' }) as
+      Record<string, unknown>;
+    assert.ok('degraded' in full, 'degraded must be present, not merely falsy by absence');
+    assert.equal(full.degraded, false);
+    assert.ok(!('degraded_reason' in full), 'a healthy recall has no reason to report');
+
+    for (const format of ['compact', 'wire', 'index'] as const) {
+      const result = await recall({ query: 'atmospheric physics Helsinki MCP', format }) as
+        Record<string, unknown> & { text: string };
+      assert.ok('degraded' in result, `${format} dropped the flag`);
+      assert.equal(result.degraded, false, `${format} reported degraded on a healthy call`);
+      // The notice is added only when degraded, so healthy text is unchanged.
+      assert.doesNotMatch(result.text, /DEGRADED/, `${format} warned on a healthy call`);
+    }
+  });
+
   test('full format unchanged (backward compat)', async () => {
     const result = await recall({ query: 'atmospheric physics', format: 'full' }) as { success: boolean; memories: Array<{ observation_id: string; entity: string; content: string }>; count: number };
 

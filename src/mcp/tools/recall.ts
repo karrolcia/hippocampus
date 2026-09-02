@@ -46,24 +46,64 @@ interface MemoryResult {
   version_hash?: string | null;
 }
 
-export interface RecallResult {
+/**
+ * `degraded` is present on EVERY recall response, `false` on the healthy path,
+ * for the same reason `remember` carries `replaced: false` (D10): a field that
+ * only appears when something went wrong cannot be distinguished from an older
+ * server that never had the field. Absence must not be the all-clear signal —
+ * that is precisely how an empty `near_matches` came to mean "nothing was
+ * destroyed" when it meant the opposite.
+ */
+interface DegradationFlags {
+  degraded: boolean;
+  /** Error class + message only. Never the query, the content, or a vector. */
+  degraded_reason?: string;
+}
+
+export interface RecallResult extends DegradationFlags {
   success: boolean;
   count: number;
   memories: MemoryResult[];
 }
 
-export interface RecallCompactResult {
+export interface RecallCompactResult extends DegradationFlags {
   success: boolean;
   count: number;
   text: string;
 }
 
-export interface RecallIndexResult {
+export interface RecallIndexResult extends DegradationFlags {
   success: boolean;
   count: number;
   entity_count: number;
   text: string;
 }
+
+/** Cap on the error text echoed back; a driver error can be arbitrarily long. */
+const MAX_DEGRADED_REASON_CHARS = 300;
+
+/**
+ * Error class + message, truncated. Deliberately never interpolates the query
+ * or any observation content: this string is both returned to the caller and
+ * written to the server log, and the log is the side that must never carry
+ * memory content (SECURITY.md / CLAUDE.md security rules).
+ */
+function describeEmbeddingFailure(err: unknown): string {
+  if (!(err instanceof Error)) return 'unknown error';
+  const name = err.name || 'Error';
+  const detail = err.message ? `${name}: ${err.message}` : name;
+  return detail.length > MAX_DEGRADED_REASON_CHARS
+    ? `${detail.slice(0, MAX_DEGRADED_REASON_CHARS)}…`
+    : detail;
+}
+
+// A degraded answer is also announced INSIDE the text formats, not only in the
+// sibling JSON field. `compact`, `wire` and `index` exist to be read as text,
+// and a caller reading `text` while the disclosure sits in a field it never
+// looks at is the same miss the field was added to close. Added only when
+// degraded, so the healthy output of every format is byte-identical to before.
+const DEGRADED_NOTICE_WIRE = '#DEGRADED semantic search unavailable — keyword-only results, may be incomplete';
+const DEGRADED_NOTICE_COMPACT = '**DEGRADED** — semantic search unavailable; these are keyword-only matches and may be incomplete.';
 
 export async function recall(input: RecallInput): Promise<RecallResult | RecallCompactResult | RecallIndexResult> {
   // Normalize once, here, and feed both search paths from the same variable:
@@ -81,23 +121,52 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
 
   let semanticResults: SemanticSearchResult[];
   let queryVector: Float32Array | null = null;
+  let degradedReason: string | undefined;
 
   if (input.spread) {
-    // Generate embedding once, reuse for base search + spreading
+    // Generate embedding once, reuse for base search + spreading.
+    //
+    // This branch deliberately does NOT take the keyword fallback below, and the
+    // asymmetry is the decision rather than an oversight (D16). The shared rule is
+    // that an embedding failure is always DISCLOSED; what differs is what can
+    // honestly be returned instead. Without a query vector there is no dampened
+    // relationship scoring at all, so keyword-only results are not a degraded
+    // spread — they are a different operation, silently substituted for the one
+    // that was explicitly asked for. Narrowing `spread: true` into `spread: false`
+    // under a flag is the same fail-toward-fewer-results this entry exists to
+    // remove. No recoverable answer, so: loud.
     queryVector = await generateEmbedding(input.query);
     semanticResults = semanticSearchWithVector(queryVector, searchOpts);
   } else {
-    // Degrade to an empty semantic leg if the embedder fails (model load,
-    // dimension drift) — the keyword leg still answers. But a `since` contract
-    // violation must NOT degrade: it would surface as a thin result set that
-    // looks like a ranking quirk, i.e. the silent-empty failure the assert
-    // exists to prevent, reintroduced by the error handling around it. Today
-    // the keyword leg below throws on the same bound anyway; that masking is
-    // an accident of call order, not a guarantee, so this leg holds its own.
-    semanticResults = await semanticSearch(input.query, searchOpts).catch((err: unknown) => {
+    // Semantic search is the PRIMARY leg here; keyword LIKE is the fallback. A
+    // swallowed failure therefore returns a real but badly incomplete answer
+    // wearing a complete answer's shape — `success: true` and a smaller result
+    // set, with nothing to distinguish it from the memory simply holding less.
+    // The fallback is worth keeping (a read-only caller still gets its keyword
+    // hits while the embedder is down), but only on the condition that it says
+    // so — see the empty-degraded check after the merge for the one case where
+    // saying so is not enough.
+    //
+    // A `since` contract violation is NOT a degradation and keeps its rethrow
+    // (D15). The distinction is whose fault the thin answer is: the bound is
+    // the caller's QUESTION, and answering a malformed question with a flagged
+    // partial answer is the silent-empty failure that assert exists to prevent,
+    // reintroduced by the error handling wrapped around it. An embedder failure
+    // is the server's MACHINERY, where a keyword-only answer is honest as long
+    // as it says so. The rethrow first is also what lets the flag below mean
+    // something precise: everything that reaches `degradedReason` is an
+    // embedding-side failure, which is exactly what `degraded` claims.
+    try {
+      semanticResults = await semanticSearch(input.query, searchOpts);
+    } catch (err) {
       if ((err as Error | undefined)?.name === SINCE_CONTRACT_ERROR) throw err;
-      return [] as SemanticSearchResult[];
-    });
+      semanticResults = [];
+      degradedReason = describeEmbeddingFailure(err);
+      // The app logs almost nothing per-request (request diagnostics live in
+      // Caddy's journal), so this line is the only server-side trace that the
+      // primary search leg is down. Error class and message only.
+      console.error(`recall: semantic search unavailable, falling back to keyword-only — ${degradedReason}`);
+    }
   }
 
   const keywordResults = searchObservations({
@@ -136,6 +205,26 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
       seen.add(obs.id);
       memories.push(formatObservation(obs));
     }
+  }
+
+  // An empty degraded answer is the one cell the flag cannot rescue. Everything
+  // downstream of this — every scheduled sweep, every briefing — reads
+  // `success: true, count: 0` as "the memory holds nothing about this", and that
+  // reading is indistinguishable from the truth here, which is that half the
+  // search never ran. D13 settled the disposal for exactly this shape: a bound
+  // that could not be resolved throws rather than answering with an empty set,
+  // "because returning nothing is indistinguishable from nothing was stored".
+  // Same argument, same answer. Thrown before any side effect — nothing reaches
+  // `touchRecalledObservations` on this path anyway, since the throw's own
+  // condition empties the result set that guards it, but keeping the throw ahead
+  // of it is what makes that invariant hold by construction rather than by two
+  // conditions happening to agree.
+  if (degradedReason !== undefined && memories.length === 0) {
+    throw new Error(
+      'Semantic search failed and the keyword fallback matched nothing. An empty result here ' +
+      'would be indistinguishable from an empty memory, so this is an error rather than a result. ' +
+      `Cause: ${degradedReason}`
+    );
   }
 
   // Spreading activation: follow relationships 1 hop from matched entities
@@ -259,11 +348,16 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     touchRecalledObservations(limited.map(m => m.observation_id));
   }
 
+  const degradation: DegradationFlags = degradedReason === undefined
+    ? { degraded: false }
+    : { degraded: true, degraded_reason: degradedReason };
+
   if (input.format === 'compact') {
     return {
       success: true,
       count: limited.length,
-      text: formatCompact(limited),
+      text: prependNotice(formatCompact(limited), DEGRADED_NOTICE_COMPACT, degradedReason),
+      ...degradation,
     };
   }
 
@@ -271,19 +365,31 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     return {
       success: true,
       count: limited.length,
-      text: formatWire(limited),
+      text: prependNotice(formatWire(limited), DEGRADED_NOTICE_WIRE, degradedReason),
+      ...degradation,
     };
   }
 
   if (input.format === 'index') {
-    return formatIndex(limited);
+    const index = formatIndex(limited);
+    return {
+      ...index,
+      text: prependNotice(index.text, DEGRADED_NOTICE_WIRE, degradedReason),
+      ...degradation,
+    };
   }
 
   return {
     success: true,
     count: limited.length,
     memories: limited,
+    ...degradation,
   };
+}
+
+function prependNotice(text: string, notice: string, degradedReason: string | undefined): string {
+  if (degradedReason === undefined) return text;
+  return text ? `${notice}\n\n${text}` : notice;
 }
 
 function formatCompact(memories: MemoryResult[]): string {
@@ -342,7 +448,14 @@ function formatWire(memories: MemoryResult[]): string {
   return sections.join('\n\n');
 }
 
-function formatIndex(memories: MemoryResult[]): RecallIndexResult {
+// Returns everything EXCEPT the degradation flags, deliberately. A formatter
+// cannot know whether the search that produced these rows ran whole, so letting
+// it name a value here would mean a plausible `degraded: false` default sitting
+// in the one format that has already lost the flag once — and the pre-fix shape
+// was a bare `return formatIndex(limited)`, which is exactly what a later
+// simplification would restore. Omitting it makes the call site the only place
+// the flag can come from.
+function formatIndex(memories: MemoryResult[]): Omit<RecallIndexResult, keyof DegradationFlags> {
   if (memories.length === 0) {
     return { success: true, count: 0, entity_count: 0, text: '#I 0 results, 0 entities' };
   }
