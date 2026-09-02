@@ -43,7 +43,7 @@ import {
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // ───────────────────────────────────────── Config ─────────────────────────────────────────
 
@@ -214,7 +214,7 @@ function getToken(): string {
 
 // ─────────────────────────────────── MCP HTTP client ────────────────────────────────────
 
-class HippoClient {
+export class HippoClient {
   private sessionId: string | null = null;
   private reqId = 1;
 
@@ -256,6 +256,20 @@ class HippoClient {
     }
     const first = content[0];
     if (first.type !== "text") throw new Error(`tool ${name}: non-text content`);
+
+    // An MCP tool failure is IN-BAND: HTTP 200, a normal content array, and
+    // `isError: true` alongside it. Without this check the error text falls
+    // through to the JSON.parse below, fails to parse, and is returned as a
+    // plain string — so every caller received a `string` where it expected its
+    // result type. That was not merely a confusing crash downstream: `cmdPush`
+    // wraps these calls in try/catch and counts `ok++` on no-throw, so a
+    // `remember` that the server rejected printed a tick and the run exited 0
+    // having written nothing. Same shape as the exit-code trap in the global
+    // notes — a success signal that is not measuring success.
+    if ((result as { isError?: boolean }).isError === true) {
+      throw new Error(`tool ${name} failed: ${first.text.slice(0, 500)}`);
+    }
+
     try {
       return JSON.parse(first.text) as T;
     } catch {
@@ -402,16 +416,64 @@ async function cmdPush(dryRun: boolean): Promise<void> {
   if (failed > 0) process.exit(1);
 }
 
-async function cmdPull(dryRun: boolean): Promise<void> {
+export interface RecallIndex {
+  success: boolean;
+  count: number;
+  text: string;
+  degraded?: boolean;
+  degraded_reason?: string;
+}
+
+/**
+ * `recall` reports a failed semantic leg as `degraded: true` and answers from
+ * the keyword leg alone (D16). For this script that is not a cosmetic warning:
+ * the agent index IS the work list, so a degraded index means a silently
+ * shorter list of agents, and every count printed afterwards is measured
+ * against it — `Materialized 3/3` is a true statement about a wrong 3.
+ *
+ * `degraded` is optional here only to stay honest about the wire: an older
+ * server does not send the field, and absence must not be read as a healthy
+ * `false`. It is treated as "unknown, assume healthy" rather than asserted,
+ * because this script has to keep working against a server it did not deploy.
+ */
+export function describeDegradation(index: RecallIndex): string | null {
+  if (index.degraded !== true) return null;
+  return index.degraded_reason
+    ? `semantic search was unavailable on the server — ${index.degraded_reason}`
+    : "semantic search was unavailable on the server";
+}
+
+async function cmdPull(dryRun: boolean, allowDegraded: boolean): Promise<void> {
   const client = new HippoClient(ENDPOINT, getToken());
   await client.init();
 
-  const index = await client.call<{ success: boolean; count: number; text: string }>("recall", {
+  const index = await client.call<RecallIndex>("recall", {
     query: "agent scheduled task",
     type: "agent",
     format: "index",
     limit: 50,
   });
+
+  // `pull` writes to disk from this list, and its whole promise is that disk
+  // ends up matching Hippocampus. A partial list cannot keep that promise: the
+  // agents missing from it are not reported as missing, they are simply absent,
+  // and nothing on disk or in the output says so. `list` prints a warning and
+  // continues because showing a labelled subset is still an honest answer to
+  // "what is there"; `pull` stops, because a labelled subset is not an honest
+  // sync. Same split as D16 itself — disclose when there is something honest to
+  // return, refuse when the operation would quietly mean something else.
+  const degradation = describeDegradation(index);
+  if (degradation && !allowDegraded) {
+    throw new Error(
+      `refusing to pull from a degraded index: ${degradation}. ` +
+      `The agent list may be missing entries, and a partial pull looks identical to a complete one ` +
+      `on disk. Re-run once the server is healthy, or pass --allow-degraded to accept a partial sync.`
+    );
+  }
+  if (degradation) {
+    console.warn(`⚠ pulling from a DEGRADED index (--allow-degraded): ${degradation}`);
+    console.warn("  the agent list below may be incomplete — treat a missing agent as unknown, not absent");
+  }
 
   // index format: "#I N results, M entities\n<entity>|<type>|<N obs>|<score>|v:<hash>"
   // Each line after the header starts with the entity name followed by a pipe.
@@ -426,77 +488,94 @@ async function cmdPull(dryRun: boolean): Promise<void> {
   console.log(`Found ${entityNames.length} agent entities in Hippo`);
 
   let written = 0;
+  let failed = 0;
   for (const entity of entityNames) {
-    const taskId = entity.slice("agent:".length);
-    const ctx = await client.call<{
-      success: boolean;
-      entity: { name: string; observations: Array<{ content: string; kind?: string | null }> };
-    }>("context", { topic: entity, depth: 0 });
+    try {
+      const taskId = entity.slice("agent:".length);
+      const ctx = await client.call<{
+        success: boolean;
+        entity: { name: string; observations: Array<{ content: string; kind?: string | null }> };
+      }>("context", { topic: entity, depth: 0 });
 
-    const observations = ctx.entity?.observations ?? [];
-    // Prefer the kind field when the server exposes it; fall back to content
-    // shape detection for pre-v0.4.2 servers where context omits kind.
-    const looksLikeSchedule = (s: string) =>
-      /^cron:\s*/m.test(s) && /^enabled:\s*/m.test(s);
-    const instruction = (
-      observations.find((o) => o.kind === "instruction") ??
-      observations.find((o) => !looksLikeSchedule(o.content))
-    )?.content;
-    const scheduleRaw = (
-      observations.find((o) => o.kind === "schedule") ??
-      observations.find((o) => looksLikeSchedule(o.content))
-    )?.content;
+      const observations = ctx.entity?.observations ?? [];
+      // Prefer the kind field when the server exposes it; fall back to content
+      // shape detection for pre-v0.4.2 servers where context omits kind.
+      const looksLikeSchedule = (s: string) =>
+        /^cron:\s*/m.test(s) && /^enabled:\s*/m.test(s);
+      const instruction = (
+        observations.find((o) => o.kind === "instruction") ??
+        observations.find((o) => !looksLikeSchedule(o.content))
+      )?.content;
+      const scheduleRaw = (
+        observations.find((o) => o.kind === "schedule") ??
+        observations.find((o) => looksLikeSchedule(o.content))
+      )?.content;
 
-    if (!instruction) {
-      console.warn(`⚠ ${entity}: no 'instruction' observation, skipping`);
-      continue;
+      if (!instruction) {
+        console.warn(`⚠ ${entity}: no 'instruction' observation, skipping`);
+        continue;
+      }
+      const schedule = scheduleRaw ? parseScheduleYaml(scheduleRaw) : null;
+
+      const fm: SkillFrontmatter = {
+        name: taskId,
+        description: schedule?.description,
+        model: schedule?.model,
+      };
+      const skillMd = stringifyFrontmatter(fm) + instruction + "\n";
+
+      const taskDir = join(TASKS_DIR, taskId);
+      const skillPath = join(taskDir, "SKILL.md");
+
+      if (dryRun) {
+        console.log(`\n→ ${skillPath}`);
+        console.log(indent(skillMd, "    "));
+        continue;
+      }
+
+      mkdirSync(taskDir, { recursive: true });
+      if (existsSync(skillPath)) {
+        const bak = `${skillPath}.bak`;
+        copyFileSync(skillPath, bak);
+        console.log(`  backed up existing SKILL.md → ${bak}`);
+      }
+      writeFileSync(skillPath, skillMd, "utf8");
+      console.log(`✓ ${skillPath}`);
+      written++;
+    } catch (err) {
+      // Isolated per agent, matching cmdPush. Before the isError fix a failed
+      // `context` call surfaced as an empty observation list and was reported as
+      // "no 'instruction' observation, skipping" — a false explanation for a
+      // call that never succeeded. It now says what actually happened, and one
+      // unreachable agent no longer decides the fate of the other forty-nine.
+      console.error(`✗ ${entity}: ${(err as Error).message}`);
+      failed++;
     }
-    const schedule = scheduleRaw ? parseScheduleYaml(scheduleRaw) : null;
-
-    const fm: SkillFrontmatter = {
-      name: taskId,
-      description: schedule?.description,
-      model: schedule?.model,
-    };
-    const skillMd = stringifyFrontmatter(fm) + instruction + "\n";
-
-    const taskDir = join(TASKS_DIR, taskId);
-    const skillPath = join(taskDir, "SKILL.md");
-
-    if (dryRun) {
-      console.log(`\n→ ${skillPath}`);
-      console.log(indent(skillMd, "    "));
-      continue;
-    }
-
-    mkdirSync(taskDir, { recursive: true });
-    if (existsSync(skillPath)) {
-      const bak = `${skillPath}.bak`;
-      copyFileSync(skillPath, bak);
-      console.log(`  backed up existing SKILL.md → ${bak}`);
-    }
-    writeFileSync(skillPath, skillMd, "utf8");
-    console.log(`✓ ${skillPath}`);
-    written++;
   }
 
   if (dryRun) {
     console.log("\n(dry run — no files written)");
   } else {
-    console.log(`\nMaterialized ${written}/${entityNames.length} agents to disk`);
+    console.log(`\nMaterialized ${written}/${entityNames.length} agents to disk${failed ? ` (${failed} failed)` : ""}`);
   }
+  if (failed > 0) process.exit(1);
 }
 
 async function cmdList(): Promise<void> {
   const client = new HippoClient(ENDPOINT, getToken());
   await client.init();
 
-  const index = await client.call<{ success: boolean; count: number; text: string }>("recall", {
+  const index = await client.call<RecallIndex>("recall", {
     query: "agent scheduled task",
     type: "agent",
     format: "index",
     limit: 50,
   });
+  const degradation = describeDegradation(index);
+  if (degradation) {
+    console.warn(`⚠ DEGRADED listing: ${degradation}`);
+    console.warn("  this is a keyword-only subset — agents may be missing from it\n");
+  }
   console.log(index.text);
 }
 
@@ -510,29 +589,43 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const cmd = args[0];
   const dryRun = args.includes("--dry-run");
+  const allowDegraded = args.includes("--allow-degraded");
 
   switch (cmd) {
     case "push":
       await cmdPush(dryRun);
       break;
     case "pull":
-      await cmdPull(dryRun);
+      await cmdPull(dryRun, allowDegraded);
       break;
     case "list":
       await cmdList();
       break;
     default:
       console.error(
-        "usage: tsx scripts/sync-agents.ts <push|pull|list> [--dry-run]\n\n" +
+        "usage: tsx scripts/sync-agents.ts <push|pull|list> [--dry-run] [--allow-degraded]\n\n" +
         "  push   migrate ~/.claude/scheduled-tasks/* → Hippocampus\n" +
         "  pull   materialize Hippocampus agents → ~/.claude/scheduled-tasks/*\n" +
-        "  list   print the agent index from Hippocampus"
+        "  list   print the agent index from Hippocampus\n\n" +
+        "  --allow-degraded   let pull proceed when the server reports a degraded\n" +
+        "                     (keyword-only) index; the agent list may be incomplete"
       );
       process.exit(64);
   }
 }
 
-main().catch((err) => {
-  console.error(`\nerror: ${(err as Error).message}`);
-  process.exit(1);
-});
+// Same main-module gate as src/index.ts: run the CLI only when this file IS the
+// entrypoint, so a test can import HippoClient without the script firing main()
+// (which would demand a token and hit the network). The fixes above are on a
+// write path that reports its own success, which is exactly the kind that needs
+// to stay regression-testable.
+const isMain =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMain) {
+  main().catch((err) => {
+    console.error(`\nerror: ${(err as Error).message}`);
+    process.exit(1);
+  });
+}
