@@ -70,7 +70,9 @@ export function createMcpServer(): McpServer {
           type: args.type,
           source: args.source,
           importance: args.importance,
-          kind: args.kind,
+          // Sanitised like content/entity, and `|| undefined` so a control-char-only
+          // kind cannot slip past zod's .min(1) as an empty string.
+          kind: args.kind?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') || undefined,
           replace_kind: args.replace_kind,
         };
 
@@ -271,7 +273,9 @@ export function createMcpServer(): McpServer {
           // at write, so a raw needle with control chars can never match.
           old_content: args.old_content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
           new_content: args.new_content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
-          kind: args.kind?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
+          // `|| undefined`: a control-char-only kind would otherwise reach update() as
+          // "" — not nullish — and both store an empty kind and clear the carried one.
+          kind: args.kind?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') || undefined,
         };
         const result = await update(sanitized);
         return {

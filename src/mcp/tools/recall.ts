@@ -22,7 +22,7 @@ export const recallSchema = z.object({
   // schema is not a second opinion about format — it is the input-length cap
   // every other string param carries, and a length cap cannot disagree.
   since: z.string().optional(),
-  kind: z.string().max(50).optional(),
+  kind: z.string().min(1).max(50).optional(),
   spread: z.boolean().default(false),
   format: z.enum(['full', 'compact', 'wire', 'index']).default('full'),
 });

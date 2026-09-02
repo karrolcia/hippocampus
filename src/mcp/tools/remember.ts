@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { findOrCreateEntity, findEntityById, listEntities, type Entity } from '../../db/entities.js';
-import { createObservation, deleteObservation, getObservationsByEntityAndKind, getObservationsByIds } from '../../db/observations.js';
+import { createObservation, deleteObservation, getObservationsByEntityAndKind } from '../../db/observations.js';
 import { createRelationship, relationshipExists } from '../../db/relationships.js';
 import { generateEmbedding, storeEmbedding, getEmbeddingsByEntity, deleteEmbedding } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
@@ -201,13 +201,13 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
     // This branch DELETES an observation and writes a replacement, so it is the
     // same shape as update() and merge(): the replacement must inherit the
     // deleted row's `kind` and `importance` unless the caller set them. `match`
-    // comes from the embeddings table and carries neither, so look the row up
-    // first. Without this, a plain remember() that happened to be a longer
-    // same-day near-duplicate of a `skill:*` trigger silently rewrote it as
-    // kind null / importance 1.0 (found in the D18 review, 2026-09-02).
-    const replacedRow = getObservationsByIds([match.observation_id])[0];
-    const carriedImportance = input.importance ?? replacedRow?.importance ?? 1.0;
-    const carriedKind = input.kind ?? replacedRow?.kind ?? undefined;
+    // is a StoredVector whose SELECT joins the observations row, so both fields
+    // are already in hand (importance normalised to 1.0 by the mapper). Without
+    // this, a plain remember() that happened to be a longer same-day
+    // near-duplicate of a `skill:*` trigger silently rewrote it as kind null /
+    // importance 1.0 (found in the D18 review, 2026-09-02).
+    const carriedImportance = input.importance ?? match.importance;
+    const carriedKind = input.kind ?? match.kind ?? undefined;
     deleteEmbedding(match.observation_id);
     deleteObservation(match.observation_id);
 
