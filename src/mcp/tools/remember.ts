@@ -26,7 +26,7 @@ export const rememberSchema = z.object({
   type: z.string().max(50).optional(),
   source: z.string().max(100).optional(),
   importance: z.number().min(0).max(1).optional(),
-  kind: z.string().max(50).optional(),
+  kind: z.string().min(1).max(50).optional(),
   replace_kind: z.boolean().optional(),
 });
 

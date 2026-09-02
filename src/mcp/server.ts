@@ -157,12 +157,19 @@ export function createMcpServer(): McpServer {
     },
     async (args) => {
       try {
+        // Sanitise the kind FILTER like the write paths do — but REJECT an empty
+        // result rather than coercing to undefined: a control-char-only filter
+        // coerced to "no filter" would widen a garbage query to match everything.
+        const recallKind = args.kind?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+        if (args.kind !== undefined && !recallKind) {
+          throw new Error('kind filter must not be empty after removing control characters');
+        }
         const result = await recall({
           query: args.query,
           limit: args.limit,
           type: args.type,
           since: args.since,
-          kind: args.kind,
+          kind: recallKind,
           spread: args.spread,
           format: args.format,
         });
