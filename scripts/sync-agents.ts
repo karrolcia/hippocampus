@@ -480,6 +480,17 @@ export function describeDegradation(index: RecallIndex): string | null {
  * `count`, and names a specific fault with a specific fix.
  */
 export function describeSaturation(index: RecallIndex, limit: number): string | null {
+  // Symmetry with describeUnderCount. Without this the count-less case still
+  // refused (`undefined < 50` is false) but explained itself as "returned
+  // undefined observations … agents past the cut were dropped" — a confident
+  // false cause. Unreachable against any server that ships the index format,
+  // which is where a wrong message survives longest.
+  if (!Number.isFinite(index.count)) {
+    return (
+      `the agent index reported no usable result count (got ${JSON.stringify(index.count)}), so ` +
+      `whether it was truncated cannot be determined`
+    );
+  }
   if (index.count < limit) return null;
   return (
     `the agent index returned ${index.count} observations against a limit of ${limit}, which is ` +
@@ -542,9 +553,10 @@ export function describeUnderCount(
   if (Number.isFinite(indexed) && parsed < (indexed as number)) {
     return (
       `the index reports ${indexed} entities but only ${parsed} name(s) could be parsed from it — ` +
-      `this is a parsing failure in sync-agents, not a server problem. The name pattern accepts ` +
-      `[A-Za-z0-9_.-] only, so an entity name containing ':', a space or a non-ASCII character is ` +
-      `dropped silently.`
+      `at least one name could not be parsed here. The name pattern accepts \`agent:\` followed by ` +
+      `[A-Za-z0-9_.-] only, so an agent-typed entity whose name contains ':', a space or a ` +
+      `non-ASCII character — or that lacks the \`agent:\` prefix entirely — is dropped silently. ` +
+      `A search shortfall may be present underneath this one; re-check after fixing the names.`
     );
   }
   if (parsed >= expected) return null;
@@ -727,7 +739,24 @@ export async function cmdPull(
         // materialized nothing, reporting success. The caller asked for this
         // agent on disk and did not get it; that is a failure, whatever the
         // cause sits in.
-        console.warn(`⚠ ${entity}: no 'instruction' observation, skipping`);
+        // Two different situations, and telling the operator the wrong one sends
+        // them to re-create an instruction that already exists. `kind` is
+        // nullable per observation, so an entity can hold a mix: an instruction
+        // written before schema V5 (kind NULL) beside a schedule written after
+        // it. `serverReportsKind` is then true, the tagged lookup misses, and
+        // "no 'instruction' observation" is simply false. Falling back on a
+        // mixed entity is not the alternative — that is what promoted
+        // checkpoints into skill bodies — so it stays a skip, with the cause
+        // named and the repair named. No live instances (0 NULL-kind
+        // observations across all 27 on prod), which is exactly when a message
+        // like this gets written wrong and nobody notices.
+        const untagged = observations.some((o) => o.kind == null);
+        console.warn(
+          untagged
+            ? `⚠ ${entity}: holds observations with no 'kind' (written before schema V5) and ` +
+              `none tagged 'instruction' — re-push this agent to tag them, skipping`
+            : `⚠ ${entity}: no 'instruction' observation, skipping`
+        );
         skipped++;
         continue;
       }

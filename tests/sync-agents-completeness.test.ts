@@ -1,7 +1,8 @@
 /**
- * Two ways `scripts/sync-agents.ts` can still read an incomplete agent list and
- * not notice (D18). Follow-up to D17, which closed the in-band-error and
- * degraded-index legs of the same problem; these are the two it did not reach.
+ * Ways `scripts/sync-agents.ts` can still read — or write — an incomplete agent
+ * list and not notice (D18). Follow-up to D17, which closed the in-band-error
+ * and degraded-index legs of the same problem. The first two below are the ones
+ * it did not reach; the rest surfaced in review of the fix for them.
  *
  * 1. SATURATION. The enumeration passes `limit: 50`, which is `recall`'s schema
  *    maximum — it cannot be raised — and it bounds OBSERVATIONS, not entities.
@@ -356,6 +357,34 @@ describe('pull will not materialize one agent from another agent’s observation
   });
 });
 
+describe('the two sources disagreeing the other way is said out loud', () => {
+  test('an index listing MORE agents than export warns, and still proceeds', async () => {
+    // Not a refusal: export would be the stale side and the agents listed
+    // demonstrably exist. But a contradiction between two sources of truth that
+    // nothing mentions is how absence becomes an all-clear, so it warns — and
+    // covering that only through the predicate leaves the branch deletable.
+    const TWO = index({
+      count: 2,
+      entity_count: 2,
+      text: '#I 2 results, 2 entities\nagent:alpha|agent|1 obs|0.31\nagent:beta|agent|1 obs|0.30',
+    });
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...a: unknown[]) => void warnings.push(a.join(' '));
+    let code: number | undefined;
+    try {
+      code = await runCapturingExit(() => cmdPull(true, false, fakeClient(TWO, echoContext, 1)));
+    } finally {
+      console.warn = realWarn;
+    }
+    assert.equal(code, undefined, 'an over-count must not stop the pull');
+    assert.ok(
+      warnings.some((w) => /lists 2 agents but export reports 1/.test(w)),
+      `expected a disagreement warning, got: ${JSON.stringify(warnings)}`
+    );
+  });
+});
+
 describe('a checkpoint is never mistaken for an instruction', () => {
   // Pre-existing, live, and the reason this file's own "verified healthy on
   // prod" claim was wrong. The content-shape fallback (for pre-v0.4.2 servers
@@ -423,6 +452,33 @@ describe('a checkpoint is never mistaken for an instruction', () => {
     assert.ok(logs.some((l) => /do the real work/.test(l)));
   });
 
+  test('a mixed-kind entity is skipped with the cause named, not called instruction-less', async () => {
+    // `kind` is nullable per observation, so an entity can hold an instruction
+    // written before schema V5 (kind NULL) beside a schedule written after it.
+    // Falling back here is what promoted checkpoints, so it stays a skip — but
+    // "no 'instruction' observation" would be false, and would send the operator
+    // to re-create an instruction that already exists.
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...a: unknown[]) => void warnings.push(a.join(' '));
+    let code: number | undefined;
+    try {
+      code = await runCapturingExit(() =>
+        cmdPull(true, false, fakeClient(ONE, ctxWith([
+          { content: 'cron: "0 9 * * *"\nenabled: true\n', kind: 'schedule' },
+          { content: 'legacy untagged instruction', kind: null },
+        ]), 1))
+      );
+    } finally {
+      console.warn = realWarn;
+    }
+    assert.equal(code, 1);
+    assert.ok(
+      warnings.some((w) => /written before schema V5/.test(w)),
+      `expected the untagged-observation cause, got: ${JSON.stringify(warnings)}`
+    );
+  });
+
   test('CONTROL: a server that reports no kind at all still uses the shape fallback', async () => {
     // The fallback is not deleted — it is scoped. A pre-v0.4.2 server sends no
     // `kind` anywhere, and there the shape heuristic is the only signal there is.
@@ -432,9 +488,12 @@ describe('a checkpoint is never mistaken for an instruction', () => {
     let code: number | undefined;
     try {
       code = await runCapturingExit(() =>
+        // Explicit `kind: null`, which is what the server actually sends for a
+        // pre-V5 observation — an omitted key would pass `!= null` too and would
+        // not mirror the wire.
         cmdPull(true, false, fakeClient(ONE, ctxWith([
-          { content: 'legacy instruction body' },
-          { content: 'cron: "0 9 * * *"\nenabled: true\n' },
+          { content: 'legacy instruction body', kind: null },
+          { content: 'cron: "0 9 * * *"\nenabled: true\n', kind: null },
         ]), 1))
       );
     } finally {
@@ -452,7 +511,7 @@ describe('a name the regex dropped is not blamed on the similarity floor', () =>
     // different cause and fix.
     const msg = describeUnderCount(3, 3, 2);
     assert.ok(msg);
-    assert.match(msg, /parsing failure in sync-agents/);
+    assert.match(msg, /could not be parsed/);
     assert.doesNotMatch(msg, /similarity floor/, 'a parse bug must not be blamed on the server');
   });
 
@@ -460,7 +519,7 @@ describe('a name the regex dropped is not blamed on the similarity floor', () =>
     const msg = describeUnderCount(3, 2, 2);
     assert.ok(msg);
     assert.match(msg, /similarity floor/);
-    assert.doesNotMatch(msg, /parsing failure/);
+    assert.doesNotMatch(msg, /could not be parsed/);
   });
 });
 
