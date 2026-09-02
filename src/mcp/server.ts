@@ -53,6 +53,7 @@ export function createMcpServer(): McpServer {
         .describe('Importance score (0.0-1.0, default 1.0). Higher = boosted in recall ranking. Use for facts that should always surface.'),
       kind: z
         .string()
+        .min(1)
         .max(50)
         .optional()
         .describe('Classification: fact, decision, preference, rationale (why a decision was made, tradeoffs weighed), exploration (half-formed ideas, open questions), question, or custom. Filterable in recall.'),
@@ -69,7 +70,9 @@ export function createMcpServer(): McpServer {
           type: args.type,
           source: args.source,
           importance: args.importance,
-          kind: args.kind,
+          // Sanitised like content/entity, and `|| undefined` so a control-char-only
+          // kind cannot slip past zod's .min(1) as an empty string.
+          kind: args.kind?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') || undefined,
           replace_kind: args.replace_kind,
         };
 
@@ -139,6 +142,7 @@ export function createMcpServer(): McpServer {
         ),
       kind: z
         .string()
+        .min(1)
         .max(50)
         .optional()
         .describe('Filter by observation kind (e.g., "fact", "decision", "question")'),
@@ -153,12 +157,19 @@ export function createMcpServer(): McpServer {
     },
     async (args) => {
       try {
+        // Sanitise the kind FILTER like the write paths do — but REJECT an empty
+        // result rather than coercing to undefined: a control-char-only filter
+        // coerced to "no filter" would widen a garbage query to match everything.
+        const recallKind = args.kind?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+        if (args.kind !== undefined && !recallKind) {
+          throw new Error('kind filter must not be empty after removing control characters');
+        }
         const result = await recall({
           query: args.query,
           limit: args.limit,
           type: args.type,
           since: args.since,
-          kind: args.kind,
+          kind: recallKind,
           spread: args.spread,
           format: args.format,
         });
@@ -269,7 +280,9 @@ export function createMcpServer(): McpServer {
           // at write, so a raw needle with control chars can never match.
           old_content: args.old_content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
           new_content: args.new_content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
-          kind: args.kind?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ''),
+          // `|| undefined`: a control-char-only kind would otherwise reach update() as
+          // "" — not nullish — and both store an empty kind and clear the carried one.
+          kind: args.kind?.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') || undefined,
         };
         const result = await update(sanitized);
         return {
@@ -296,7 +309,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'merge',
-    'Merge multiple observations into one. Atomic operation: provide merged text + list of observation IDs. Creates the merged observation, deletes the originals, handles embeddings. Use after consolidate to act on clusters.',
+    'Merge multiple observations into one. Atomic operation: provide merged text + list of observation IDs. Creates the merged observation, deletes the originals, handles embeddings. Use after consolidate to act on clusters. Carries `kind` and `importance` through from the sources (importance takes the max). REFUSES — without deleting anything — when the sources carry two or more different kinds: merge each kind separately, or update() them to a common kind first. A null kind is no opinion, not a third kind.',
     {
       observation_ids: z
         .array(z.string())

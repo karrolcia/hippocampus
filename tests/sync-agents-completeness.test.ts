@@ -1,6 +1,6 @@
 /**
  * Ways `scripts/sync-agents.ts` can still read — or write — an incomplete agent
- * list and not notice (D18). Follow-up to D17, which closed the in-band-error
+ * list and not notice (D19). Follow-up to D17, which closed the in-band-error
  * and degraded-index legs of the same problem. The first two below are the ones
  * it did not reach; the rest surfaced in review of the fix for them.
  *

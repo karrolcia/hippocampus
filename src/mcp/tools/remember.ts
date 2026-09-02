@@ -26,7 +26,7 @@ export const rememberSchema = z.object({
   type: z.string().max(50).optional(),
   source: z.string().max(100).optional(),
   importance: z.number().min(0).max(1).optional(),
-  kind: z.string().max(50).optional(),
+  kind: z.string().min(1).max(50).optional(),
   replace_kind: z.boolean().optional(),
 });
 
@@ -198,10 +198,20 @@ export async function remember(input: RememberInput): Promise<RememberResult> {
     // Only reachable for a same-day match on a non-append-only entity.
     const replacedContent = match.content;
     const replacedId = match.observation_id;
+    // This branch DELETES an observation and writes a replacement, so it is the
+    // same shape as update() and merge(): the replacement must inherit the
+    // deleted row's `kind` and `importance` unless the caller set them. `match`
+    // is a StoredVector whose SELECT joins the observations row, so both fields
+    // are already in hand (importance normalised to 1.0 by the mapper). Without
+    // this, a plain remember() that happened to be a longer same-day
+    // near-duplicate of a `skill:*` trigger silently rewrote it as kind null /
+    // importance 1.0 (found in the D18 review, 2026-09-02).
+    const carriedImportance = input.importance ?? match.importance;
+    const carriedKind = input.kind ?? match.kind ?? undefined;
     deleteEmbedding(match.observation_id);
     deleteObservation(match.observation_id);
 
-    const observation = createObservation(entity.id, input.content, input.source, input.importance ?? 1.0, input.kind);
+    const observation = createObservation(entity.id, input.content, input.source, carriedImportance, carriedKind);
     storeEmbedding(entity.id, observation.id, vector, input.content);
 
     const relationshipsCreated = detectAndCreateRelationships(entity, input.content);
