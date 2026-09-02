@@ -48,7 +48,7 @@ describe('Compact recall format', () => {
     assert.ok(!('memories' in result), 'Compact result should not have memories field');
   });
 
-  // The healthy-path half of D14's contract. It cannot live in
+  // The healthy-path half of D16's contract. It cannot live in
   // tests/recall-degraded.test.ts: that file poisons the model load for its
   // whole process, and the embedding pipeline is a cached singleton, so one
   // process cannot hold both a working and a broken embedder. `degraded` is

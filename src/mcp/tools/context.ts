@@ -51,7 +51,7 @@ export async function context(input: ContextInput): Promise<ContextResult> {
     // Semantic fallback: search for memories about this topic
     // Require minimum similarity to avoid false matches on unrelated queries
     //
-    // Deliberately uncaught (D14). This is the LAST leg of exact -> LIKE ->
+    // Deliberately uncaught (D16). This is the LAST leg of exact -> LIKE ->
     // semantic, so unlike `recall` there is never a partial answer to return
     // when it fails: the only other outcome is the `success: false, "No entity
     // found for topic X"` below, which is a false claim if the leg that would
