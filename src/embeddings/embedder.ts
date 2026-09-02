@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/index.js';
+import { assertStoredSinceBound } from '../db/timestamps.js';
 import { cosineSimilarity } from './similarity.js';
 
 const EMBEDDING_DIM = 384;
@@ -145,8 +146,9 @@ export interface SemanticSearchOptions {
    * Lower bound on `created_at`, **already normalized** to the stored UTC form
    * `YYYY-MM-DD HH:MM:SS` — the comparison below is lexicographic, so any other
    * spelling silently matches nothing (an ISO `T` sorts above every stored
-   * row). Callers normalize via `normalizeSinceBound`; this layer has no error
-   * channel to reject a bad value through.
+   * row). Callers normalize via `normalizeSinceBound`. That precondition is
+   * asserted, not merely documented: a violation throws rather than returning
+   * the empty set (D15).
    */
   since?: string;
   kind?: string;
@@ -164,6 +166,8 @@ export function semanticSearchWithVector(
   queryVector: Float32Array,
   options?: SemanticSearchOptions
 ): SemanticSearchResult[] {
+  assertStoredSinceBound(options?.since, 'semanticSearchWithVector');
+
   const limit = options?.limit ?? 10;
 
   const db = getDatabase();

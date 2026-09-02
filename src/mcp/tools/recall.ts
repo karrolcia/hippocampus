@@ -5,7 +5,7 @@ import { getRelatedEntities } from '../../db/relationships.js';
 import { generateEmbedding, semanticSearchWithVector, getEmbeddingsByEntity, semanticSearch, type SemanticSearchResult } from '../../embeddings/embedder.js';
 import { cosineSimilarity } from '../../embeddings/similarity.js';
 import { isAppendOnlyEntity } from '../../config.js';
-import { normalizeSinceBound, parseStoredTimestamp } from '../../db/timestamps.js';
+import { normalizeSinceBound, parseStoredTimestamp, SINCE_CONTRACT_ERROR } from '../../db/timestamps.js';
 
 export const recallSchema = z.object({
   query: z
@@ -127,7 +127,7 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     // Generate embedding once, reuse for base search + spreading.
     //
     // This branch deliberately does NOT take the keyword fallback below, and the
-    // asymmetry is the decision rather than an oversight (D14). The shared rule is
+    // asymmetry is the decision rather than an oversight (D16). The shared rule is
     // that an embedding failure is always DISCLOSED; what differs is what can
     // honestly be returned instead. Without a query vector there is no dampened
     // relationship scoring at all, so keyword-only results are not a degraded
@@ -146,9 +146,20 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
     // hits while the embedder is down), but only on the condition that it says
     // so — see the empty-degraded check after the merge for the one case where
     // saying so is not enough.
+    //
+    // A `since` contract violation is NOT a degradation and keeps its rethrow
+    // (D15). The distinction is whose fault the thin answer is: the bound is
+    // the caller's QUESTION, and answering a malformed question with a flagged
+    // partial answer is the silent-empty failure that assert exists to prevent,
+    // reintroduced by the error handling wrapped around it. An embedder failure
+    // is the server's MACHINERY, where a keyword-only answer is honest as long
+    // as it says so. The rethrow first is also what lets the flag below mean
+    // something precise: everything that reaches `degradedReason` is an
+    // embedding-side failure, which is exactly what `degraded` claims.
     try {
       semanticResults = await semanticSearch(input.query, searchOpts);
     } catch (err) {
+      if ((err as Error | undefined)?.name === SINCE_CONTRACT_ERROR) throw err;
       semanticResults = [];
       degradedReason = describeEmbeddingFailure(err);
       // The app logs almost nothing per-request (request diagnostics live in
@@ -203,8 +214,11 @@ export async function recall(input: RecallInput): Promise<RecallResult | RecallC
   // search never ran. D13 settled the disposal for exactly this shape: a bound
   // that could not be resolved throws rather than answering with an empty set,
   // "because returning nothing is indistinguishable from nothing was stored".
-  // Same argument, same answer. Thrown before `touchRecalledObservations` so a
-  // doomed call leaves no recall-count residue.
+  // Same argument, same answer. Thrown before any side effect — nothing reaches
+  // `touchRecalledObservations` on this path anyway, since the throw's own
+  // condition empties the result set that guards it, but keeping the throw ahead
+  // of it is what makes that invariant hold by construction rather than by two
+  // conditions happening to agree.
   if (degradedReason !== undefined && memories.length === 0) {
     throw new Error(
       'Semantic search failed and the keyword fallback matched nothing. An empty result here ' +

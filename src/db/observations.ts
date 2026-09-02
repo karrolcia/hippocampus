@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getDatabase } from './index.js';
 import { updateEntityTimestamp } from './entities.js';
+import { assertStoredSinceBound } from './timestamps.js';
 
 export interface Observation {
   id: string;
@@ -56,14 +57,17 @@ export interface SearchOptions {
    * Lower bound on `created_at`, **already normalized** to the stored UTC form
    * `YYYY-MM-DD HH:MM:SS` — the comparison below is lexicographic, so any other
    * spelling silently matches nothing (an ISO `T` sorts above every stored
-   * row). Callers normalize via `normalizeSinceBound`; this layer has no error
-   * channel to reject a bad value through.
+   * row). Callers normalize via `normalizeSinceBound`. That precondition is
+   * asserted, not merely documented: a violation throws rather than returning
+   * the empty set (D15).
    */
   since?: string;
   kind?: string;
 }
 
 export function searchObservations(options: SearchOptions): ObservationWithEntity[] {
+  assertStoredSinceBound(options.since, 'searchObservations');
+
   const db = getDatabase();
   const limit = Math.min(options.limit ?? 10, 50);
   const searchTerm = `%${options.query}%`;

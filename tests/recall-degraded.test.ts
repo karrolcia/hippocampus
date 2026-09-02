@@ -1,5 +1,5 @@
 /**
- * Regression tests for the silent semantic-search degradation in `recall` (D14).
+ * Regression tests for the silent semantic-search degradation in `recall` (D16).
  *
  * `recall()` used to call:
  *
@@ -159,8 +159,31 @@ describe('recall discloses a degraded semantic leg', () => {
     );
   });
 
+  test('a malformed question is never reported as a degraded answer', async () => {
+    // The D15 interaction, exercised from the one direction that is reachable.
+    // `degraded` means "the server's machinery failed"; a bad `since` bound
+    // means "the caller's question was malformed", and the two must not be
+    // conflated — a contract violation dressed as a flagged partial answer is
+    // the silent-empty failure D15's assert exists to prevent, reintroduced by
+    // the error handling wrapped around it. Here BOTH are true at once (the
+    // embedder is down for this whole file), which is exactly the case where a
+    // careless catch would report the wrong one.
+    await assert.rejects(
+      () => recall({ query: KEYWORD_HIT, since: 'whenever', limit: 10, spread: false, format: 'full' }),
+      (err: Error) => {
+        assert.match(err.message, /since/i, 'the bound is what failed, so the bound is what must be named');
+        assert.doesNotMatch(
+          err.message,
+          /[Ss]emantic search failed/,
+          'a malformed bound must not be attributed to the embedder'
+        );
+        return true;
+      }
+    );
+  });
+
   test('spread still throws — an embedding failure there has no honest fallback', async () => {
-    // Unchanged behaviour, pinned deliberately (D14). Keyword-only results are
+    // Unchanged behaviour, pinned deliberately (D16). Keyword-only results are
     // not a degraded spread; they are a different operation. The two branches
     // disagree about the disposal because they disagree about what can be
     // returned, not about whether the failure matters.
