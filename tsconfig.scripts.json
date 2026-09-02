@@ -1,0 +1,9 @@
+{
+  "//": "scripts/ ships as tsx source rather than being built into dist/, so it sits outside the main tsconfig's `include` and had no type gate at all. A separate file rather than widening the main one: `rootDir: src` is what keeps dist/ flat, and adding scripts/ there changes the build layout.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["scripts/**/*.ts"]
+}

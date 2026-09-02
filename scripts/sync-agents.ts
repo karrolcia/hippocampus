@@ -426,6 +426,18 @@ export interface RecallIndex {
 }
 
 /**
+ * The enumeration cap, in one place because two call sites read it and the
+ * saturation check has to compare against the value actually sent.
+ *
+ * 50 is not a tuning choice — it is `recall`'s schema maximum
+ * (`limit: z.number().min(1).max(50)` in src/mcp/server.ts), so it cannot be
+ * raised. And it bounds OBSERVATIONS, not entities: each agent carries two or
+ * three (instruction, schedule, sometimes checkpoint), which makes the real
+ * ceiling roughly 16-25 agents. Currently 22 observations across 14 agents.
+ */
+export const PULL_RECALL_LIMIT = 50;
+
+/**
  * `recall` reports a failed semantic leg as `degraded: true` and answers from
  * the keyword leg alone (D16). For this script that is not a cosmetic warning:
  * the agent index IS the work list, so a degraded index means a silently
@@ -437,6 +449,31 @@ export interface RecallIndex {
  * `false`. It is treated as "unknown, assume healthy" rather than asserted,
  * because this script has to keep working against a server it did not deploy.
  */
+/**
+ * Whether the enumeration was cut off by the limit rather than by running out
+ * of agents. A sibling of `describeDegradation` rather than a widening of it:
+ * that function's `string | null` contract is pinned by D17's tests, and the
+ * two failures want different dispositions.
+ *
+ * Sound because `recall` applies no similarity floor —
+ * `semanticSearchWithVector` scores every row matching `type: "agent"` and
+ * slices to the limit — so a count BELOW the limit really is everything, and a
+ * count that reaches it means rows fell off the end. Which rows is decided by
+ * relevance to the query string, so the agents lost are arbitrary from the
+ * caller's point of view but perfectly deterministic from the server's: the
+ * same ones vanish on every run.
+ */
+export function describeSaturation(index: RecallIndex, limit: number): string | null {
+  if (index.count < limit) return null;
+  return (
+    `the agent index returned ${index.count} observations against a limit of ${limit}, which is ` +
+    `recall's schema maximum — the result set is full, so agents past the cut were dropped. ` +
+    `Each agent holds 2-3 observations, so this ceiling is roughly 16-25 agents. ` +
+    `Enumerate with export({format: "json", type: "agent"}) instead, which lists entities ` +
+    `directly and is not capped.`
+  );
+}
+
 export function describeDegradation(index: RecallIndex): string | null {
   if (index.degraded !== true) return null;
   return index.degraded_reason
@@ -460,7 +497,7 @@ export async function cmdPull(
     query: "agent scheduled task",
     type: "agent",
     format: "index",
-    limit: 50,
+    limit: PULL_RECALL_LIMIT,
   });
 
   // `pull` writes to disk from this list, and its whole promise is that disk
@@ -471,6 +508,29 @@ export async function cmdPull(
   // "what is there"; `pull` stops, because a labelled subset is not an honest
   // sync. Same split as D16 itself — disclose when there is something honest to
   // return, refuse when the operation would quietly mean something else.
+  // Checked before degradation, and deliberately NOT bypassable by
+  // --allow-degraded. That flag means "I accept a search that could not run
+  // fully"; truncation is a different bargain — the agents past the cut are
+  // dropped on every run, deterministically, and no flag makes that an honest
+  // sync. There is also nothing to accept it FOR: the limit is already the
+  // server's maximum, so the only way forward is a different primitive.
+  const saturation = describeSaturation(index, PULL_RECALL_LIMIT);
+  if (saturation) {
+    throw new Error(`refusing to pull from a truncated index: ${saturation}`);
+  }
+
+  // A server predating D16 sends no `degraded` field at all. D17 settled that
+  // this must not be read as degraded — the script has to keep working against
+  // a server it did not deploy — but silence is not the same as an all-clear,
+  // and prod itself was answering without the field earlier today. So: no
+  // refusal, no exit change, one line saying the guarantee is absent.
+  if (index.degraded === undefined) {
+    console.warn(
+      "⚠ this server does not report the 'degraded' flag (Hippocampus older than D16), so the " +
+      "completeness of the agent list below is unverified — redeploy to close this"
+    );
+  }
+
   const degradation = describeDegradation(index);
   if (degradation && !allowDegraded) {
     throw new Error(
@@ -506,6 +566,20 @@ export async function cmdPull(
         success: boolean;
         entity: { name: string; observations: Array<{ content: string; kind?: string | null }> };
       }>("context", { topic: entity, depth: 0 });
+
+      // `context` resolves `topic` FUZZILY: production answers a request for
+      // `agent:signal-sca` with `agent:signal-scan` and `success: true`
+      // (verified live 2026-09-02). Trusting the name we sent would write one
+      // agent's instruction into another agent's SKILL.md, under a name nobody
+      // stored. A failure rather than a skip — a skip means nothing was there,
+      // this means the wrong thing was.
+      const returned = ctx.entity?.name;
+      if (returned !== entity) {
+        throw new Error(
+          `context resolved to ${returned ? `'${returned}'` : "no entity"} — refusing to ` +
+          `materialize one agent from another's observations`
+        );
+      }
 
       const observations = ctx.entity?.observations ?? [];
       // Prefer the kind field when the server exposes it; fall back to content
@@ -590,12 +664,24 @@ async function cmdList(): Promise<void> {
     query: "agent scheduled task",
     type: "agent",
     format: "index",
-    limit: 50,
+    limit: PULL_RECALL_LIMIT,
   });
   const degradation = describeDegradation(index);
   if (degradation) {
     console.warn(`⚠ DEGRADED listing: ${degradation}`);
     console.warn("  this is a keyword-only subset — agents may be missing from it\n");
+  }
+  // `list` prints and stops, so it warns where `pull` refuses — a labelled
+  // subset still answers "what is in Hippocampus", and nothing acts on it.
+  const saturation = describeSaturation(index, PULL_RECALL_LIMIT);
+  if (saturation) {
+    console.warn(`⚠ TRUNCATED listing: ${saturation}\n`);
+  }
+  if (index.degraded === undefined) {
+    console.warn(
+      "⚠ this server does not report the 'degraded' flag (Hippocampus older than D16) — " +
+      "completeness of the listing below is unverified\n"
+    );
   }
   console.log(index.text);
 }
