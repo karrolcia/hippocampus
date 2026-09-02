@@ -53,6 +53,7 @@ export function createMcpServer(): McpServer {
         .describe('Importance score (0.0-1.0, default 1.0). Higher = boosted in recall ranking. Use for facts that should always surface.'),
       kind: z
         .string()
+        .min(1)
         .max(50)
         .optional()
         .describe('Classification: fact, decision, preference, rationale (why a decision was made, tradeoffs weighed), exploration (half-formed ideas, open questions), question, or custom. Filterable in recall.'),
@@ -139,6 +140,7 @@ export function createMcpServer(): McpServer {
         ),
       kind: z
         .string()
+        .min(1)
         .max(50)
         .optional()
         .describe('Filter by observation kind (e.g., "fact", "decision", "question")'),

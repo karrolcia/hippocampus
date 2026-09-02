@@ -13,6 +13,10 @@ export interface MergeResult {
   merged_count: number;
   entity_name: string;
   message: string;
+  // Disclosed so the caller can see what classification survived — the sources
+  // are deleted, so there is nothing else to check it against (mirrors update()).
+  kind: string | null;
+  importance: number;
   version_hash?: string | null;
 }
 
@@ -52,7 +56,10 @@ export async function merge(input: MergeInput): Promise<MergeResult> {
   // idea/seed) and a wrong kind fails silently — the text survives, only the
   // classification dies. `null` is "no opinion", not a third kind, so
   // [null, "trigger"] carries "trigger" rather than rejecting.
-  const kinds = [...new Set(observations.map(o => o.kind).filter((k): k is string => k !== null))];
+  // An empty string is "no opinion" too: the zod boundary now rejects it, but a
+  // row written before that guard (or by a direct caller) must not surface as a
+  // third kind named `""` in the refusal.
+  const kinds = [...new Set(observations.map(o => o.kind).filter((k): k is string => k != null && k !== ''))];
   if (kinds.length > 1) {
     throw new Error(
       `Cannot merge observations with different kinds: ${kinds.map(k => `"${k}"`).join(', ')}. ` +
@@ -60,14 +67,17 @@ export async function merge(input: MergeInput): Promise<MergeResult> {
         'drop the other. Merge each kind separately, or update() the sources to a common kind first.'
     );
   }
-  const kind = kinds[0];
+  const kind: string | undefined = kinds[0];
 
   // `importance`: take the maximum. The merged observation holds all of the
   // sources' content, so it is at least as important as its most important
   // source. Taking the min would silently de-prioritise material; falling back
   // to the 1.0 default (the old behaviour) silently PROMOTES a uniformly
   // de-prioritised group, since 1.0 is the schema ceiling, not a neutral value.
-  const importance = Math.max(...observations.map(o => o.importance));
+  // The column is `REAL DEFAULT 1.0` without NOT NULL, so guard a null row:
+  // `Math.max(null, …)` reads null as 0 — a silent demotion, the mirror of the
+  // bug being fixed. The validation above guarantees a non-empty list.
+  const importance = observations.reduce((max, o) => Math.max(max, o.importance ?? 1.0), 0);
 
   // Create new merged observation + embedding
   const vector = await generateEmbedding(input.content);
@@ -90,6 +100,8 @@ export async function merge(input: MergeInput): Promise<MergeResult> {
     merged_count: observations.length,
     entity_name: entity.name,
     message: `Merged ${observations.length} observations into one for "${entity.name}".`,
+    kind: newObservation.kind,
+    importance: newObservation.importance,
     version_hash: updated?.version_hash,
   };
 }

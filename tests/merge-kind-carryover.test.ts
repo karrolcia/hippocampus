@@ -72,6 +72,10 @@ describe('merge preserves observation metadata', () => {
       content: 'Internal linking: hub-and-spoke for authority, breadcrumbs mirroring canonical hierarchy.',
     });
     assert.equal(result.success, true);
+    // The sources are gone after a merge, so the result is the only place a
+    // caller can check what classification survived (mirrors update()).
+    assert.equal(result.kind, 'content', 'result discloses the carried kind');
+    assert.equal(result.importance, 0.8, 'result discloses the carried (max) importance');
 
     const [merged] = obsFor('skill:test-merge-uniform');
     assert.equal(merged.kind, 'content', 'kind must survive the merge');
@@ -211,5 +215,49 @@ describe('merge rejects a multi-kind group', () => {
       [0.5, 0.9],
       'importance untouched by the rejected merge'
     );
+  });
+});
+
+describe('remember dedup-replace carries the deleted observation metadata', () => {
+  test('a longer same-day near-duplicate written without kind/importance inherits both', async () => {
+    // Found in the D18 review: the dedup-replace branch of remember() DELETES the
+    // matched observation and wrote the caller's (absent) metadata over it, so a
+    // plain restatement of a skill trigger silently became kind null / importance 1.0.
+    await remember({
+      entity: 'skill:test-replace-carry',
+      content: 'Use this skill when the user asks to plan a programmatic SEO build.',
+      kind: 'trigger',
+      importance: 0.3,
+    });
+    const second = await remember({
+      entity: 'skill:test-replace-carry',
+      content: 'Use this skill when the user asks to plan a programmatic SEO build, or to audit one.',
+    });
+    // The test must exercise the replace path, not pass vacuously on a fresh insert.
+    assert.equal(second.replaced, true, 'the longer near-duplicate must take the dedup-replace path');
+
+    const after = obsFor('skill:test-replace-carry');
+    assert.equal(after.length, 1, 'replace leaves exactly one observation');
+    assert.equal(after[0].kind, 'trigger', 'kind inherited from the deleted observation');
+    assert.equal(after[0].importance, 0.3, 'importance inherited from the deleted observation');
+  });
+
+  test('an explicit kind/importance on the replacing write still wins', async () => {
+    await remember({
+      entity: 'skill:test-replace-explicit',
+      content: 'Trigger: the user wants a landing page audited for conversion.',
+      kind: 'trigger',
+      importance: 0.4,
+    });
+    const second = await remember({
+      entity: 'skill:test-replace-explicit',
+      content: 'Trigger: the user wants a landing page audited for conversion or accessibility.',
+      kind: 'content',
+      importance: 0.9,
+    });
+    assert.equal(second.replaced, true);
+    const after = obsFor('skill:test-replace-explicit');
+    assert.equal(after[0].kind, 'content');
+    assert.equal(after[0].importance, 0.9);
   });
 });
