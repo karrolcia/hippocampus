@@ -882,7 +882,10 @@ async function main(): Promise<void> {
         "  pull   materialize Hippocampus agents → ~/.claude/scheduled-tasks/*\n" +
         "  list   print the agent index from Hippocampus\n\n" +
         "  --allow-degraded   let pull proceed when the server reports a degraded\n" +
-        "                     (keyword-only) index; the agent list may be incomplete"
+        "                     (keyword-only) index; the agent list may be incomplete.\n" +
+        "                     Rarely enough on its own: a degraded index is a SHORTER\n" +
+        "                     index, so it usually also trips the completeness check\n" +
+        "                     against export, which no flag bypasses."
       );
       process.exit(64);
   }
