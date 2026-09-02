@@ -420,6 +420,8 @@ async function cmdPush(dryRun: boolean): Promise<void> {
 export interface RecallIndex {
   success: boolean;
   count: number;
+  /** Entities the SEARCH found, before this script's regex parses names out. */
+  entity_count?: number;
   text: string;
   degraded?: boolean;
   degraded_reason?: string;
@@ -473,7 +475,7 @@ export function describeDegradation(index: RecallIndex): string | null {
  * reports 27 observations across 14 agents, the same recall reports 22 — five
  * already dropped by the floor. No agent was lost only because each dropped
  * observation had a sibling above the line, and four agents currently hold
- * exactly one observation. `verifyAgainstExport` below is the check that
+ * exactly one observation. `describeUnderCount` below is the check that
  * actually holds; this one stays because it is free, fails closed on a missing
  * `count`, and names a specific fault with a specific fix.
  */
@@ -482,7 +484,7 @@ export function describeSaturation(index: RecallIndex, limit: number): string | 
   return (
     `the agent index returned ${index.count} observations against a limit of ${limit}, which is ` +
     `recall's schema maximum — the result set is full, so agents past the cut were dropped. ` +
-    `Each agent holds 2-3 observations, so this ceiling is roughly 16-25 agents. ` +
+    `Each agent holds 1-3 observations, so this ceiling is roughly 16-25 agents. ` +
     `Enumerate with export({format: "json", type: "agent"}) instead, which lists entities ` +
     `directly and is not capped.`
   );
@@ -518,23 +520,40 @@ interface ExportEnvelope {
  * an agent with no instruction is one `pull` cannot materialize, and D17 already
  * treats that as a failure. None exist today (minimum is 1).
  */
-export function describeUnderCount(expected: number, found: number): string | null {
+export function describeUnderCount(
+  expected: number,
+  indexed: number | undefined,
+  parsed: number
+): string | null {
   // Fails closed on a server that answers `export` without a count, and says
-  // which of the two checks could not run. Left implicit this still refused —
-  // `n >= undefined` is false — but reported "export reports undefined", which
-  // sends the operator looking for a missing agent that does not exist.
+  // which check could not run. Left implicit it still refused — `n >= undefined`
+  // is false — but reported "export reports undefined", sending the operator to
+  // look for a missing agent that does not exist.
   if (!Number.isFinite(expected)) {
     return (
       `export did not report an entity_count (got ${JSON.stringify(expected)}), so the agent ` +
       `index cannot be checked for completeness`
     );
   }
-  if (found >= expected) return null;
+  // Two different faults, deliberately told apart. The search losing an agent
+  // and this script's own regex losing a name produce the same shortfall, and a
+  // message that names one cause for both is the false explanation D17's review
+  // already called out once.
+  if (Number.isFinite(indexed) && parsed < (indexed as number)) {
+    return (
+      `the index reports ${indexed} entities but only ${parsed} name(s) could be parsed from it — ` +
+      `this is a parsing failure in sync-agents, not a server problem. The name pattern accepts ` +
+      `[A-Za-z0-9_.-] only, so an entity name containing ':', a space or a non-ASCII character is ` +
+      `dropped silently.`
+    );
+  }
+  if (parsed >= expected) return null;
   return (
-    `the agent index lists ${found} agent(s) but export reports ${expected} in Hippocampus — ` +
-    `${expected - found} agent(s) are missing from the index. recall is a similarity search and ` +
-    `drops observations below its 0.15 floor, so an agent can be absent from it while existing ` +
-    `on the server. Enumerate with export({format: "json", type: "agent"}) to see them all.`
+    `the agent index lists ${parsed} agent(s) but export reports ${expected} in Hippocampus — ` +
+    `${expected - parsed} agent(s) are missing from the index. Either their observations all fall ` +
+    `below recall's 0.15 similarity floor, or the entity holds no observations at all (recall ` +
+    `searches observations, so it cannot see such an entity). Enumerate with ` +
+    `export({format: "json", type: "agent"}) to see them all.`
   );
 }
 
@@ -610,11 +629,35 @@ export async function cmdPull(
   // Before the empty-list branch below, deliberately. A floor that removed every
   // agent lands there, and "No agent entities found in Hippocampus." is the most
   // confident possible way to say the opposite of the truth.
-  const inventory = await client.call<ExportEnvelope>("export", {
-    format: "wire",
-    type: "agent",
-  });
-  const underCount = describeUnderCount(inventory.entity_count, entityNames.length);
+  // Wrapped so an export failure says which operation needed it. Unwrapped, the
+  // operator who ran `pull` gets `error: tool export failed: …` naming a tool
+  // they never invoked, with nothing saying it was a completeness cross-check.
+  let inventory: ExportEnvelope;
+  try {
+    inventory = await client.call<ExportEnvelope>("export", { format: "wire", type: "agent" });
+  } catch (err) {
+    throw new Error(
+      `could not verify the agent index against export, so completeness is unknown: ` +
+      `${(err as Error).message}`
+    );
+  }
+  const underCount = describeUnderCount(
+    inventory.entity_count,
+    index.entity_count,
+    entityNames.length
+  );
+  if (
+    Number.isFinite(inventory.entity_count) &&
+    entityNames.length > inventory.entity_count
+  ) {
+    // Not a refusal — export would be the stale side, and a pull of agents that
+    // demonstrably exist is still correct. But two sources of truth disagreeing
+    // is not nothing, and saying nothing is how absence becomes an all-clear.
+    console.warn(
+      `⚠ the index lists ${entityNames.length} agents but export reports ` +
+      `${inventory.entity_count}; proceeding, but the two disagree`
+    );
+  }
   if (underCount) {
     // Unconditional, like saturation and for the same reason: --allow-degraded
     // accepts a search that could not run fully, and this is a search that ran
@@ -654,18 +697,28 @@ export async function cmdPull(
       }
 
       const observations = ctx.entity?.observations ?? [];
-      // Prefer the kind field when the server exposes it; fall back to content
-      // shape detection for pre-v0.4.2 servers where context omits kind.
       const looksLikeSchedule = (s: string) =>
         /^cron:\s*/m.test(s) && /^enabled:\s*/m.test(s);
-      const instruction = (
-        observations.find((o) => o.kind === "instruction") ??
-        observations.find((o) => !looksLikeSchedule(o.content))
-      )?.content;
-      const scheduleRaw = (
-        observations.find((o) => o.kind === "schedule") ??
-        observations.find((o) => looksLikeSchedule(o.content))
-      )?.content;
+
+      // The content-shape fallback exists for pre-v0.4.2 servers whose `context`
+      // omitted `kind`. It used to run whenever no `instruction` was found —
+      // including on servers that DO report kind, where "no instruction" is a
+      // fact about the agent, not a gap in the response. So an agent holding
+      // only a checkpoint matched "the first observation that does not look like
+      // a schedule", and `last_run: …` became the skill body: written with a
+      // `✓`, counted as materialized, exit 0. Three agents on prod are
+      // checkpoint-only and a fourth holds a lone `fact`, so this fired on 4 of
+      // 14. The round trip closed it — the next `push` reads that file back and
+      // stores the checkpoint text as `kind: "instruction"`, putting the
+      // corruption in the canonical store. Trust `kind` whenever the server
+      // speaks it at all; fall back only when it says nothing anywhere.
+      const serverReportsKind = observations.some((o) => o.kind != null);
+      const instruction = serverReportsKind
+        ? observations.find((o) => o.kind === "instruction")?.content
+        : observations.find((o) => !looksLikeSchedule(o.content))?.content;
+      const scheduleRaw = serverReportsKind
+        ? observations.find((o) => o.kind === "schedule")?.content
+        : observations.find((o) => looksLikeSchedule(o.content))?.content;
 
         if (!instruction) {
         // Counted, not just warned. `continue` used to bypass both counters, so
@@ -754,6 +807,19 @@ async function cmdList(): Promise<void> {
       "⚠ this server does not report the 'degraded' flag (Hippocampus older than D16) — " +
       "completeness of the listing below is unverified\n"
     );
+  }
+  // The oracle is the only check that catches the hazard this all exists for, so
+  // `list` — whose entire job is answering "what is in Hippocampus" — runs it
+  // too. As a warning, not a refusal: `list` prints and stops, and a labelled
+  // subset is still an honest answer. Without it `list` would keep printing 13
+  // agents where 14 exist, under two warnings about other things.
+  try {
+    const inventory = await client.call<ExportEnvelope>("export", { format: "wire", type: "agent" });
+    const parsed = Array.from(index.text.matchAll(/^(agent:[\w.-]+)\|/gm)).length;
+    const underCount = describeUnderCount(inventory.entity_count, index.entity_count, parsed);
+    if (underCount) console.warn(`⚠ INCOMPLETE listing: ${underCount}\n`);
+  } catch (err) {
+    console.warn(`⚠ could not check the listing against export: ${(err as Error).message}\n`);
   }
   console.log(index.text);
 }

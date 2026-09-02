@@ -57,6 +57,11 @@ function fakeClient(
         return contextFor(String(args.topic));
       }
       if (name === 'export') {
+        // Round 1 pinned the limit on the `recall` branch and left this one
+        // ignoring args: deleting `type: "agent"` from cmdPull's export call
+        // failed zero tests, while in production it makes export list the whole
+        // knowledge base and refuse every pull forever.
+        assert.equal(args.type, 'agent', 'the export cross-check must be scoped to agents');
         return {
           success: true,
           entity_count: exportEntityCount ?? countAgentLines(idx),
@@ -223,24 +228,24 @@ describe('the export cross-check catches an agent the search dropped', () => {
   });
 
   test('fewer agents in the index than exist on the server is reported', () => {
-    const msg = describeUnderCount(3, 2);
+    const msg = describeUnderCount(3, 2, 2);
     assert.ok(msg);
     assert.match(msg, /lists 2 agent\(s\) but export reports 3/);
     assert.match(msg, /1 agent\(s\) are missing/);
   });
 
   test('CONTROL: equal counts are not reported', () => {
-    assert.equal(describeUnderCount(2, 2), null);
+    assert.equal(describeUnderCount(2, 2, 2), null);
   });
 
   test('CONTROL: more in the index than export is not reported', () => {
     // Only under-count is loss. Over-count would mean export is the stale one,
     // which is not a reason to refuse a pull.
-    assert.equal(describeUnderCount(2, 3), null);
+    assert.equal(describeUnderCount(2, 3, 3), null);
   });
 
   test('a server that reports no entity_count fails closed, and names which check could not run', () => {
-    const msg = describeUnderCount(undefined as unknown as number, 2);
+    const msg = describeUnderCount(undefined as unknown as number, 2, 2);
     assert.ok(msg, 'an unusable oracle must not read as an all-clear');
     assert.match(msg, /did not report an entity_count/);
     assert.doesNotMatch(msg, /agent\(s\) are missing/, 'it must not invent a missing agent');
@@ -251,7 +256,13 @@ describe('the export cross-check catches an agent the search dropped', () => {
       () => cmdPull(true, false, fakeClient(TWO_LISTED, echoContext, 3)),
       (err: Error) => {
         assert.match(err.message, /refusing to pull from an incomplete index/);
-        assert.match(err.message, /0\.15 floor/, 'the message must name the actual cause');
+        assert.match(err.message, /0\.15 similarity floor/);
+        assert.match(
+          err.message,
+          /no observations at all/,
+          'the message must offer both causes — a zero-observation entity produces the same ' +
+            'shortfall, and blaming the floor for it is a false explanation'
+        );
         return true;
       }
     );
@@ -342,6 +353,114 @@ describe('pull will not materialize one agent from another agent’s observation
       errors.some((e) => /context resolved to no entity/.test(e)),
       `expected the mismatch reason, got: ${JSON.stringify(errors)}`
     );
+  });
+});
+
+describe('a checkpoint is never mistaken for an instruction', () => {
+  // Pre-existing, live, and the reason this file's own "verified healthy on
+  // prod" claim was wrong. The content-shape fallback (for pre-v0.4.2 servers
+  // that omitted `kind`) ran whenever no instruction was FOUND, so on a server
+  // that does report kind, an agent holding only a checkpoint matched "first
+  // observation that isn't a schedule" and `last_run: …` became the skill body
+  // — written with a ✓, counted as materialized, exit 0. Three prod agents are
+  // checkpoint-only. The next `push` then stored that text back as
+  // kind: "instruction", putting it in the canonical store.
+  const ONE = index({
+    count: 1,
+    entity_count: 1,
+    text: '#I 1 results, 1 entities\nagent:resume-watcher|agent|1 obs|0.29',
+  });
+  const ckpt = 'last_run: 2026-09-02T16:20:41+03:00\nlast_status: completed\n';
+
+  function ctxWith(observations: Array<{ content: string; kind?: string | null }>) {
+    return () => ({ success: true, entity: { name: 'agent:resume-watcher', observations } });
+  }
+
+  test('a checkpoint-only agent is skipped, not materialized from its checkpoint', async () => {
+    const logs: string[] = [];
+    const realLog = console.log;
+    console.log = (...a: unknown[]) => void logs.push(a.join(' '));
+    let code: number | undefined;
+    try {
+      code = await runCapturingExit(() =>
+        cmdPull(true, false, fakeClient(ONE, ctxWith([{ content: ckpt, kind: 'checkpoint' }]), 1))
+      );
+    } finally {
+      console.log = realLog;
+    }
+    assert.equal(code, 1, 'an agent with no instruction must not be reported as materialized');
+    assert.ok(
+      !logs.some((l) => /last_run:/.test(l)),
+      `a checkpoint must never reach a SKILL.md body, got: ${JSON.stringify(logs)}`
+    );
+  });
+
+  test('an observation of some other kind is not promoted either', async () => {
+    // One prod agent holds a lone `kind: fact` whose prose reads like an
+    // instruction. Plausible-looking is exactly why it must not be guessed at.
+    const code = await runCapturingExit(() =>
+      cmdPull(true, false, fakeClient(ONE, ctxWith([{ content: 'Ping Alex on 2026-05-15', kind: 'fact' }]), 1))
+    );
+    assert.equal(code, 1);
+  });
+
+  test('CONTROL: a real instruction observation still materializes', async () => {
+    const logs: string[] = [];
+    const realLog = console.log;
+    console.log = (...a: unknown[]) => void logs.push(a.join(' '));
+    let code: number | undefined;
+    try {
+      code = await runCapturingExit(() =>
+        cmdPull(true, false, fakeClient(ONE, ctxWith([
+          { content: 'do the real work', kind: 'instruction' },
+          { content: 'cron: "0 9 * * *"\nenabled: true\n', kind: 'schedule' },
+        ]), 1))
+      );
+    } finally {
+      console.log = realLog;
+    }
+    assert.equal(code, undefined, 'a well-formed agent must still pull cleanly');
+    assert.ok(logs.some((l) => /do the real work/.test(l)));
+  });
+
+  test('CONTROL: a server that reports no kind at all still uses the shape fallback', async () => {
+    // The fallback is not deleted — it is scoped. A pre-v0.4.2 server sends no
+    // `kind` anywhere, and there the shape heuristic is the only signal there is.
+    const logs: string[] = [];
+    const realLog = console.log;
+    console.log = (...a: unknown[]) => void logs.push(a.join(' '));
+    let code: number | undefined;
+    try {
+      code = await runCapturingExit(() =>
+        cmdPull(true, false, fakeClient(ONE, ctxWith([
+          { content: 'legacy instruction body' },
+          { content: 'cron: "0 9 * * *"\nenabled: true\n' },
+        ]), 1))
+      );
+    } finally {
+      console.log = realLog;
+    }
+    assert.equal(code, undefined);
+    assert.ok(logs.some((l) => /legacy instruction body/.test(l)));
+  });
+});
+
+describe('a name the regex dropped is not blamed on the similarity floor', () => {
+  test('a parse shortfall says it is a parse shortfall', () => {
+    // The search found 3 entities, the regex could only parse 2 (a name with a
+    // colon, say). Same numeric shortfall as a floor-dropped agent, entirely
+    // different cause and fix.
+    const msg = describeUnderCount(3, 3, 2);
+    assert.ok(msg);
+    assert.match(msg, /parsing failure in sync-agents/);
+    assert.doesNotMatch(msg, /similarity floor/, 'a parse bug must not be blamed on the server');
+  });
+
+  test('CONTROL: when the parse matches the index, the floor explanation is the one given', () => {
+    const msg = describeUnderCount(3, 2, 2);
+    assert.ok(msg);
+    assert.match(msg, /similarity floor/);
+    assert.doesNotMatch(msg, /parsing failure/);
   });
 });
 
