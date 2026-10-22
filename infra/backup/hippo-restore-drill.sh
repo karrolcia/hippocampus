@@ -36,7 +36,7 @@ bundle_arg=${2:-}
 DRILL_LOG=${DRILL_LOG:-${DRILL_STATE}/drill.log}
 DRILL_RUNNER=${DRILL_RUNNER:-docker}
 DRILL_IMAGE=${DRILL_IMAGE:-hippo-drill:latest}
-FRESH_MAX_HOURS=${FRESH_MAX_HOURS:-30}
+FRESH_MAX_HOURS=${FRESH_MAX_HOURS:-28}
 BACKUP_SSH_PORT=${BACKUP_SSH_PORT:-23}
 NOTIFY=${NOTIFY:-}
 mkdir -p "$DRILL_STATE"
@@ -89,26 +89,32 @@ newest_remote() {
   case "${BACKUP_REMOTE:?set BACKUP_REMOTE}" in
     *:*) listing=$(rsync --list-only --timeout=120 -e "$(ssh_cmd)" "${BACKUP_REMOTE%/}/" 2>&1) \
            || finish_ FAIL list "cannot list the offsite target: ${listing:0:200}" ;;
-    *)   listing=$(ls -1 "$BACKUP_REMOTE" 2>&1) || finish_ FAIL list "cannot list ${BACKUP_REMOTE}" ;;
+    *)   listing=$(ls -1a "$BACKUP_REMOTE" 2>&1) || finish_ FAIL list "cannot list ${BACKUP_REMOTE}" ;;
   esac
-  NEWEST=$(printf '%s\n' "$listing" | grep -oE 'hippo-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gpg' | sort | tail -1 || true)
+  # Anchored to the WHOLE name (last field of an `rsync --list-only` line, or an `ls` line):
+  # an unanchored match also finds `hippo-<stamp>.tar.gpg` inside rsync's receiver temp
+  # file `.hippo-<stamp>.tar.gpg.XXXXXX`, a bundle that never landed.
+  NEWEST=$(printf '%s\n' "$listing" | awk '{print $NF}' \
+    | grep -E '^hippo-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.tar\.gpg$' | sort | tail -1 || true)
 }
 
-# age_hours <bundle name>: whole hours since the stamp in the name (UTC).
-age_hours() {
+# age_seconds <bundle name>: seconds since the stamp in the name (UTC).
+age_seconds() {
   local s=${1#hippo-}; s=${s%.tar.gpg}
   local iso="${s:0:10} ${s:11:2}:${s:13:2}:${s:15:2}" then
   then=$(date -u -d "$iso" +%s 2>/dev/null || date -u -j -f '%Y-%m-%d %H:%M:%S' "$iso" +%s 2>/dev/null) || return 1
-  echo $(( ($(date -u +%s) - then) / 3600 ))
+  echo $(( $(date -u +%s) - then ))
 }
 
 if [ "$mode" = freshness ]; then
   newest_remote; newest=$NEWEST
   [ -n "$newest" ] || finish_ FAIL freshness "no hippo bundle on the offsite target"
-  age=$(age_hours "$newest") || finish_ FAIL freshness "cannot date ${newest}"
-  [ "$age" -le "$FRESH_MAX_HOURS" ] \
-    || finish_ FAIL freshness "newest bundle ${newest} is ${age}h old (max ${FRESH_MAX_HOURS}h): the nightly backup on hippo is not landing"
-  finish_ PASS freshness "newest ${newest}, ${age}h old"
+  secs=$(age_seconds "$newest") || finish_ FAIL freshness "cannot date ${newest}"
+  # Compared in SECONDS: flooring to whole hours turned 30h30m into "30h" and passed a
+  # missed night at a 30h limit (review finding, 2026-10-22).
+  [ "$secs" -le $(( FRESH_MAX_HOURS * 3600 )) ] \
+    || finish_ FAIL freshness "newest bundle ${newest} is $((secs / 3600))h$(( secs % 3600 / 60 ))m old (max ${FRESH_MAX_HOURS}h): the nightly backup on hippo is not landing"
+  finish_ PASS freshness "newest ${newest}, $((secs / 3600))h$(( secs % 3600 / 60 ))m old"
 fi
 
 [ "$mode" = drill ] || { echo "usage: $0 drill [bundle] | freshness" >&2; FINISHED=1; exit 2; }
@@ -119,7 +125,7 @@ export GNUPGHOME
 [ -r "$HIPPO_PASSPHRASE_FILE" ] || finish_ FAIL config "passphrase file not readable"
 
 work=$(mktemp -d "${DRILL_STATE}/.work.XXXXXX")
-trap 'rc=$?; rm -rf "$work"; [ $rc -ne 0 ] && [ -z "${FINISHED:-}" ] && { FINISHED=1; finish FAIL crash "exit ${rc}"; }' EXIT
+trap 'rc=$?; rm -rf "$work"; [ $rc -ne 0 ] && [ -z "${FINISHED:-}" ] && { FINISHED=1; finish FAIL crash "line ${LINENO}, exit ${rc}"; }' EXIT
 
 if [ -n "$bundle_arg" ]; then
   bundle=$bundle_arg
@@ -160,7 +166,10 @@ else
           < "${SCRIPT_DIR}/hippo-dbtool.mjs" 2>&1) || true
 fi
 unset HIPPO_PASSPHRASE
-result=$(printf '%s\n' "$out" | grep '^{' | tail -1)
+# `|| true`: with no JSON line, grep exits 1 and set -e would end the run in the EXIT trap
+# as a bare "crash", hiding the verifier's own error from the alert. Nothing reads
+# PIPESTATUS here.
+result=$(printf '%s\n' "$out" | grep '^{' | tail -1 || true)
 case "$result" in
   *'"ok":true'*) ;;
   *'"ok":false'*)
@@ -170,5 +179,5 @@ case "$result" in
   *) finish_ FAIL verify "${name}: verifier produced no result: $(printf '%s' "$out" | tail -c 200 | tr '\n' ' ')" ;;
 esac
 counts=$(printf '%s' "$result" | sed -n 's/.*"counts":{\([^}]*\)}.*/\1/p' | tr -d '"')
-age=$(age_hours "$name" || echo '?')
+age=$(( $(age_seconds "$name" || echo 0) / 3600 ))
 finish_ PASS restore "${name} (${age}h old): integrity ok, counts equal manifest: ${counts}"

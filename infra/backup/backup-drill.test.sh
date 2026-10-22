@@ -128,6 +128,36 @@ expect FAIL freshness "freshness, newest bundle years old" -- env BACKUP_REMOTE=
 mkdir -p "$T/empty"
 expect FAIL freshness "freshness, no bundle at all" -- env BACKUP_REMOTE="$T/empty" bash "$B/hippo-restore-drill.sh" freshness
 
+# --- review findings 2026-10-22, one case each.
+stamp_ago() { date -u -v "-${1}H" +%Y-%m-%d-%H%M%S 2>/dev/null || date -u -d "-${1} hours" +%Y-%m-%d-%H%M%S; }
+# A missed night: the newest bundle is ~30.5h old at the 09:00 check. Hours were floored
+# before, so 30h30m read as "30h" and passed a 30h limit.
+# 28h30m, not 29h: floored to whole hours it reads 28 and passes, so only a seconds
+# comparison fails it. That is what makes this case guard the fix.
+missed=$(date -u -v-28H -v-30M +%Y-%m-%d-%H%M%S 2>/dev/null || date -u -d "-28 hours -30 minutes" +%Y-%m-%d-%H%M%S)
+mkdir -p "$T/missed"; cp "$GOOD" "$T/missed/hippo-${missed}.tar.gpg"
+expect FAIL freshness "freshness, newest bundle 28h30m old (limit 28h)" -- env BACKUP_REMOTE="$T/missed" bash "$B/hippo-restore-drill.sh" freshness
+mkdir -p "$T/late"; cp "$GOOD" "$T/late/hippo-$(stamp_ago 27).tar.gpg"
+expect PASS freshness "freshness, newest bundle 27h old (limit 28h)" -- env BACKUP_REMOTE="$T/late" bash "$B/hippo-restore-drill.sh" freshness
+# rsync's receiver temp file for a bundle that never landed must not count as fresh.
+mkdir -p "$T/temp"; cp "$GOOD" "$T/temp/hippo-2020-01-01-020000.tar.gpg"
+cp "$GOOD" "$T/temp/.hippo-$(stamp_ago 1).tar.gpg.Ab12Cd"
+expect FAIL freshness "freshness ignores an rsync temp file" -- env BACKUP_REMOTE="$T/temp" bash "$B/hippo-restore-drill.sh" freshness
+# A verifier that cannot run must FAIL at verify with its own error, not as a bare crash.
+expect FAIL verify "verifier cannot load the driver" -- env HOST_NODE_CWD=/ bash "$B/hippo-restore-drill.sh" drill "$GOOD"
+grep -q 'verifier produced no result' "$DRILL_STATE/drill.log" && ok "the verify FAIL carries the verifier's output" || bad "verify FAIL lacks diagnostic"
+
+# A rebuilt hippo box starts with an EMPTY staging dir. Its first nightly must add to the
+# offsite history, not replace it (a blanket rsync --delete did).
+mkdir -p "$T/rebuilt-off"
+for st in 2026-01-01-020000 "$(stamp_ago 48)" "$(stamp_ago 24)"; do cp "$GOOD" "$T/rebuilt-off/hippo-$st.tar.gpg"; done
+GPG_RECIPIENTS="$REC $DRL" GNUPGHOME="$T/gpg-pub" BACKUP_STAGING="$T/rebuilt-staging" \
+  BACKUP_REMOTE="$T/rebuilt-off" SNAPSHOT_RUNNER=host HOST_SNAPSHOT_DIR="$T/data" HOST_NODE_CWD="$REPO" \
+  RETENTION=14 RETENTION_DAYS=14 HIPPO_PASSPHRASE="$LIVE_PASSPHRASE" bash "$B/hippo-backup.sh" > "$T/rebuilt.out" 2>&1 \
+  || { bad "rebuilt-box backup run"; cat "$T/rebuilt.out"; }
+n_rebuilt=$(ls "$T/rebuilt-off"/hippo-*.tar.gpg | wc -l | tr -d ' ')
+[ "$n_rebuilt" = 4 ] && ok "rebuilt box: offsite history kept (3 old + 1 new)" || bad "rebuilt box: offsite has $n_rebuilt bundles: $(ls "$T/rebuilt-off" | tr '\n' ' ')"
+
 # --- prune: two ancient bundles + the real one, RETENTION=1 / 14 days → ancient ones go,
 # then a second run keeps both real bundles because they are inside the day window.
 cp "$GOOD" "$T/staging/hippo-2020-01-01-020000.tar.gpg"; cp "$GOOD" "$T/staging/hippo-2020-01-02-020000.tar.gpg"

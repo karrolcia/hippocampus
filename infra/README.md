@@ -14,10 +14,10 @@ drill that proves the newest one restores. Decision and reasoning: `DECISIONS.md
 | hippo box | `/var/backups/hippocampus` | none | local copies of the retained bundles |
 | drill host | `/opt/hippocampus` (a read-only checkout) | whole repo | the drill script and the drill image |
 | drill host | `/etc/systemd/system/hippo-restore-drill.{service,timer}` | `infra/systemd/hippo-restore-drill.*` | 1st of the month 06:00 UTC: restore the newest offsite bundle and verify it |
-| drill host | `/etc/systemd/system/hippo-backup-freshness.{service,timer}` | `infra/systemd/hippo-backup-freshness.*` | daily 09:00 UTC: alert if the newest offsite bundle is older than 30h |
+| drill host | `/etc/systemd/system/hippo-backup-freshness.{service,timer}` | `infra/systemd/hippo-backup-freshness.*` | daily 09:00 UTC: alert if the newest offsite bundle is older than 28h |
 | drill host | `/etc/hippocampus-drill/drill.env` (600) | `infra/backup/drill.env.example` | offsite target, passphrase file, notifier |
 | drill host | `/var/lib/hippocampus-drill/` | none | the DRILL private key (`gnupg/`), `drill.log`, last results |
-| offsite | Storage Box sub-account, base dir `hippocampus` | none | `hippo-YYYY-MM-DD-HHMMSS.tar.gpg`, the same set as the hippo box keeps locally |
+| offsite | Storage Box sub-account, base dir `hippocampus` | none | `hippo-YYYY-MM-DD-HHMMSS.tar.gpg`. New bundles are pushed, and only bundles the hippo box itself prunes are deleted, so a rebuilt box with an empty staging dir cannot wipe the history |
 
 The drill host is a separate machine on purpose. The disaster being insured against is
 losing the hippo box, so recovery is proven with keys that are not on it.
@@ -109,7 +109,7 @@ first: the drill needs a bundle to restore.
    `hippocampus`, SSH on, external reachability on, read-only off. Install three keys on
    it with `ssh-copy-id -s -p 23`: the hippo box, the drill host and the laptop. Pin the
    host key into each box's `storagebox_known_hosts`. Turn on Storage Box snapshots: the
-   hippo box's key can delete (the mirror uses `--delete`), so a compromised hippo box
+   hippo box's key can delete (it removes the bundles it prunes), so a compromised hippo box
    could otherwise empty the offsite copy.
 3. **hippo box.** Copy `backup.env.example` to `/etc/hippocampus/backup.env` and fill it
    in. Install the two units, run the service once by hand, then enable the timer.
@@ -118,5 +118,6 @@ first: the drill needs a bundle to restore.
    2. Build the image: `docker build -f infra/backup/drill.Dockerfile -t hippo-drill:latest infra/backup`.
    3. Copy `drill.env.example` to `/etc/hippocampus-drill/drill.env` and fill it in.
    4. Import the drill private key into `/var/lib/hippocampus-drill/gnupg`.
-   5. Write the passphrase file.
+   5. Write the passphrase file. The drill key must have no passphrase: the drill runs
+      gpg unattended, and a passphrase fails every drill at decrypt.
    6. Install the four units, run the drill once by hand, then enable both timers.
