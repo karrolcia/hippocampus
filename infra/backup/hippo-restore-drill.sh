@@ -46,6 +46,9 @@ log() { printf '%s  %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 # notify <severity> <title> <body>: ops-kit's notify.sh when configured, stdout always.
 # A failed delivery is logged but never turns a PASS into a FAIL or hides a FAIL.
 notify() {
+  if [ -n "$NOTIFY" ] && [ ! -x "$NOTIFY" ]; then
+    log "WARN: NOTIFY=${NOTIFY} is not executable; this alert goes to the journal only"
+  fi
   if [ -n "$NOTIFY" ] && [ -x "$NOTIFY" ]; then
     NOTIFY_SOURCE="hippo-restore-drill" NOTIFY_FINGERPRINT="hippo-restore-drill:${mode}" \
       "$NOTIFY" "$1" "$2" "$3" || log "WARN: alert delivery failed (see above)"
@@ -75,7 +78,10 @@ finish() {
 }
 
 # Called for an unexpected error under set -e, so a crash is still a recorded FAIL.
-trap 'rc=$?; [ $rc -ne 0 ] && [ -z "${FINISHED:-}" ] && { FINISHED=1; finish FAIL crash "line ${LINENO}, exit ${rc}"; }' EXIT
+# $LINENO inside an EXIT trap does not name the failing line, so an ERR trap records it.
+ERR_LINE='?'
+trap 'ERR_LINE=$LINENO' ERR
+trap 'rc=$?; [ $rc -ne 0 ] && [ -z "${FINISHED:-}" ] && { FINISHED=1; finish FAIL crash "line ${ERR_LINE}, exit ${rc}"; }' EXIT
 finish_() { FINISHED=1; finish "$@"; }
 
 ssh_cmd() { printf 'ssh -p %s -i %s -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s' \
@@ -125,7 +131,7 @@ export GNUPGHOME
 [ -r "$HIPPO_PASSPHRASE_FILE" ] || finish_ FAIL config "passphrase file not readable"
 
 work=$(mktemp -d "${DRILL_STATE}/.work.XXXXXX")
-trap 'rc=$?; rm -rf "$work"; [ $rc -ne 0 ] && [ -z "${FINISHED:-}" ] && { FINISHED=1; finish FAIL crash "line ${LINENO}, exit ${rc}"; }' EXIT
+trap 'rc=$?; rm -rf "$work"; [ $rc -ne 0 ] && [ -z "${FINISHED:-}" ] && { FINISHED=1; finish FAIL crash "line ${ERR_LINE}, exit ${rc}"; }' EXIT
 
 if [ -n "$bundle_arg" ]; then
   bundle=$bundle_arg

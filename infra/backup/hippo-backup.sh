@@ -122,12 +122,13 @@ mv "$partial" "${BACKUP_STAGING}/${name}"
 enc_bytes=$(wc -c < "${BACKUP_STAGING}/${name}" | tr -d ' ')
 log "bundle ok: ${name} (${enc_bytes} bytes, ${enc_to} recipients)"
 
-# --- prune: keep a bundle if it is among the newest RETENTION OR younger than
+# --- prune SELECTION: keep a bundle if it is among the newest RETENTION OR younger than
 # RETENTION_DAYS (union, as AppKeep: the count alone silently changes meaning when the
 # timer cadence changes). Names sort chronologically. A name that does not parse is kept.
+# Nothing is deleted here; deletion happens after the mirror, offsite FIRST.
 cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%Y%m%d%H%M%S 2>/dev/null \
   || date -u -v "-${RETENTION_DAYS}d" +%Y%m%d%H%M%S 2>/dev/null || true)
-pruned=()
+expired=()
 bundles=()
 for f in "${BACKUP_STAGING}"/hippo-*.tar.gpg; do [ -f "$f" ] && bundles+=("$f"); done
 count=${#bundles[@]}
@@ -139,18 +140,14 @@ elif [ "$count" -gt "$RETENTION" ]; then
     s=${f##*/hippo-}; s=${s%.tar.gpg}; s=$(printf '%s' "$s" | tr -d '-')
     case "$s" in ''|*[!0-9]*) log "keep  ${f##*/} (unparseable stamp)"; continue ;; esac
     [ "${#s}" -eq 14 ] || { log "keep  ${f##*/} (stamp not 14 digits)"; continue; }
-    if [ "$s" -lt "$cutoff" ]; then
-      log "prune ${f##*/}"
-      if rm -f "$f"; then pruned+=("${f##*/}")
-      else log "WARN: could not remove ${f##*/}; continuing to the mirror"; fi
-    fi
+    [ "$s" -lt "$cutoff" ] && expired+=("${f##*/}")
   done
 fi
 
-# --- mirror. Push WITHOUT --delete, then delete offsite only the names this run's prune
-# just removed locally. A blanket --delete would make the offsite set equal the local one,
-# and the local set is EMPTY on a rebuilt box: the first nightly there would delete every
-# older recovery point offsite, on the day they matter most (review finding, 2026-10-22).
+# --- mirror. Push WITHOUT --delete. A blanket --delete would make the offsite set equal
+# the local one, and the local set is EMPTY on a rebuilt box: the first nightly there
+# would delete every older recovery point offsite, on the day they matter most (review
+# finding, 2026-10-22). Offsite deletion is instead limited to the expired names above.
 # Cost: bundles that never pass through this box's prune (e.g. from before a rebuild) stay
 # offsite until removed by hand. That is the safe direction.
 rsync_ssh=()
@@ -165,13 +162,25 @@ log "mirror → offsite"
 rsync -a "${rsync_ssh[@]}" --include='hippo-*.tar.gpg' --exclude='*' \
   "${BACKUP_STAGING}/" "${BACKUP_REMOTE%/}/" \
   || fail "offsite mirror failed; ${name} is safe locally and ships on the next run"
-if [ "${#pruned[@]}" -gt 0 ]; then
-  # Delete exactly the pruned names: an empty source dir, --delete, and an include list
-  # of those names only, so nothing else offsite is eligible.
+
+# --- prune: offsite FIRST, local only once offsite succeeded. The local copy is what puts
+# a name on the expired list, so keeping it after a failed offsite delete means the next
+# run selects the same name and retries. Deleting locally first lost that retry for good:
+# a bundle expired on a night the offsite step failed stayed offsite forever (round-2
+# review, 2026-10-22).
+if [ "${#expired[@]}" -gt 0 ]; then
+  # Exactly the expired names: an empty source dir, --delete, and an include list of
+  # those names only, so nothing else offsite is eligible. Names are digits and dashes
+  # (checked above), so no rsync wildcard can get in.
   empty="${work}/empty"; mkdir -p "$empty"
-  incl=(); for n in "${pruned[@]}"; do incl+=(--include="$n"); done
-  rsync -r --delete "${rsync_ssh[@]}" "${incl[@]}" --exclude='*' "${empty}/" "${BACKUP_REMOTE%/}/" \
-    && log "offsite prune: ${#pruned[@]} removed" \
-    || log "WARN: offsite prune failed; ${#pruned[@]} old bundles stay offsite until the next run"
+  incl=(); for n in "${expired[@]}"; do incl+=(--include="$n"); done
+  if rsync -r --delete "${rsync_ssh[@]}" "${incl[@]}" --exclude='*' "${empty}/" "${BACKUP_REMOTE%/}/"; then
+    for n in "${expired[@]}"; do
+      log "prune ${n}"
+      rm -f "${BACKUP_STAGING}/${n}" || log "WARN: could not remove ${n} locally"
+    done
+  else
+    log "WARN: offsite prune failed; ${#expired[@]} expired bundles kept on both sides, retried next run"
+  fi
 fi
 log "DONE ${name} offsite (${enc_bytes} bytes)"
