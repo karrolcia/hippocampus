@@ -13,6 +13,8 @@
 
 A quick run proves the worst failures are absent. It does not prove readiness.
 
+*Disclosure hold: this report goes to the public remote only after AUTH-05, SRV-03 and WEB-07 are fixed (owner's call, 2026-10-22).*
+
 ## Classification
 
 Hippocampus has no payments, but it holds one person's entire memory store: identity, projects, people, decisions, daily logs. It also runs a real login: an OAuth 2.1 authorization server with a password form and token issuance, plus static agent tokens. "Customer data" plus "user accounts" puts it at T1 even with a single user. T2 does not apply: there is no regulated data class and no contract terms. Multi-tenant is off, because there is one owner and no shared-workspace entity. AI/LLM is off: embeddings run locally (all-MiniLM-L6-v2), and no model can call tools on the server's side. The MCP tools are called *by* AI clients and authenticated like any other API.
