@@ -73,9 +73,9 @@
 
 - [ ] **AUTH-05: rate-limit the login and token endpoints** [quick] — `createRateLimiter` is mounted on `/mcp` only (`src/index.ts`), so `POST /authorize`, `POST /token` and `POST /register` take unlimited requests.
   - **Helps:** When someone tries to guess my server's password, I want them stopped after a handful of tries, so my whole memory store isn't one patient script away from theirs.
-  - **Done:** `POST /authorize` and `POST /token` return 429 after 5 requests per IP per minute, and `/register` after a looser limit; a test drives `app.request()` past the limit for each; `/mcp`'s limit is unchanged.
-  - **Assumes:** Caddy (no `trusted_proxies`) replaces a client-sent `X-Forwarded-For`, so the key is the real IP (verify: send one request with a forged XFF and read the Caddy journal's `client_ip` before relying on it).
-  - **Where:** `src/index.ts`, `src/middleware/rate-limit.ts`, `tests/`.
+  - **Done:** `POST /authorize` and `POST /token` return 429 after 5 requests per IP per minute, and `/register` after a looser limit; failed logins are also capped globally for the one account (per-IP alone is beaten by IPv6 address rotation); a test drives `app.request()` past each limit; `/mcp`'s limit is unchanged; `README.md` ("Rate limiting on all endpoints") and `SECURITY.md`'s rate-limit section describe what the code actually does, and the unused `RATE_LIMIT_REMEMBER` is wired up or removed.
+  - **Locked:** the limiter key is the real client IP; the review measured that Caddy replaces a forged `X-Forwarded-For`.
+  - **Where:** `src/index.ts`, `src/middleware/rate-limit.ts`, `src/config.ts`, `README.md`, `SECURITY.md`, `tests/`.
 - [ ] **AUTH-09: hash the OAuth password with scrypt and a salt** [session] — `POST /authorize` compares an unsalted SHA-256 (`src/auth/oauth.ts`, `sha256(password)`).
   - **Helps:** When the env file or a backup ever leaks, I want my password to stay expensive to recover, so a leak of one file doesn't hand over the login too.
   - **Done:** `HIPPO_OAUTH_PASSWORD_HASH` accepts `scrypt$N$r$p$salt$hash` (Node `crypto.scrypt`, no new dependency); the legacy SHA-256 form still verifies but logs a one-line warning (never the value); the README and `setup.sh` generate the new form; tests cover both forms and a wrong password; constant-time compare kept.
@@ -84,7 +84,7 @@
   - **Where:** `src/auth/oauth.ts`, `setup.sh`, `README.md`, `SECURITY.md` §2, `tests/`.
 - [ ] **SEC-06: scoped agent tokens, so a read-only consumer cannot delete** [session] — every `HIPPO_AGENT_TOKEN` entry grants every tool, including `forget`, `merge`, `merge_entities` and `update`.
   - **Helps:** When one of my machines or scripts leaks its token, I want the damage limited to what that script needed, so a stolen briefing key can read but not wipe my memory.
-  - **Done:** each agent-token entry can carry a scope (`read`, `write`, `admin`; an unscoped entry stays `admin` for compatibility); a `read` token gets `isError` on any mutating tool, and a `write` token on `forget`/`merge`/`merge_entities`; the scope is enforced at the tool-call boundary, not only in `tools/list`; tests per scope × tool class.
+  - **Done:** each agent-token entry can carry a scope (`read`, `write`, `admin`; an unscoped entry stays `admin` for compatibility); a `read` token gets `isError` on any mutating tool, and a `write` token on `forget`/`merge`/`merge_entities`; the scope is enforced at the tool-call boundary, not only in `tools/list`; tests per scope × tool class; automation that SSHes to the box uses a non-root user.
   - **Load:** D14/`STRICT_TOOLS` notes in CLAUDE.md (scope-widening hazard), `src/mcp/param-normalization.ts`, `scripts/sync-agents.ts` (a writer).
   - **Assumes:** OAuth tokens (Claude.ai and other clients) stay full-scope, since they are the owner (verify with the owner before building).
   - **Where:** `src/auth/oauth.ts` (`matchesAgentToken`), `src/mcp/server.ts`, `src/config.ts`, `tests/`.
@@ -109,9 +109,9 @@
 - [ ] **SRV-03: make SSH key-only on the hippo box** [quick] — `sshd -T` gives `passwordauthentication yes` (compiled default). Mitigated today because every login-shell account has a locked password.
   - **Done:** a drop-in in `sshd_config.d` with `PasswordAuthentication no`; `sshd -t` passes; reload (not restart) with a second session kept open; `sshd -T` shows `no`.
   - **Where:** the box only. Owner applies it; the audit stays read-only.
-- [ ] **WEB-01: validate and bound `POST /register`** [quick] — the body is unvalidated, uncapped, unauthenticated and unthrottled, and registered clients never expire (`src/db/oauth.ts:96-97` purges codes and tokens only).
+- [ ] **WEB-01: validate and bound the OAuth routes** [quick] — `/register` bodies are unvalidated, unauthenticated and unthrottled, registered clients never expire (`src/db/oauth.ts:96-97` purges codes and tokens only), and no layer caps request bodies, so a pre-auth request can make the process buffer an arbitrary body (code-read lead, not exercised).
   - **Helps:** indirect. A stranger can't grow the encrypted DB without limit through an open endpoint.
-  - **Done:** a zod schema on `/register` (`redirect_uris`: 1-5 URL strings; `client_name` max 200); `bodyLimit` on the OAuth routes; clients with no token issued in 30 days are purged; tests for each refusal. Coordinate with the open-registration phish item above, which may change `/register` policy.
+  - **Done:** zod schemas on `/register` (`redirect_uris`: 1-5 URL strings; `client_name` max 200), `POST /authorize` and `/token` (required fields present, so a missing `password` or `code_verifier` gets a 400 rather than a 500); `bodyLimit` on the OAuth routes and a `request_body max_size` in Caddy; clients with no token issued in 30 days are purged; tests for each refusal; `SECURITY.md`'s 10 KB body-cap claim made true or removed. Coordinate with the open-registration phish item above, which may change `/register` policy.
   - **Where:** `src/auth/oauth.ts`, `src/db/oauth.ts`, `tests/`.
 - [ ] **SRV-09: scheduled build-cache prune and a journald cap on the hippo box** [quick] — 20.6 GB build cache and 18.3 GB reclaimable images with no prune job; journald at 3.9 GB, uncapped beyond the default; the 80% disk check only writes a log line.
   - **Done:** a weekly `docker builder prune -f` timer (zero-blip; never `system prune --volumes`); `SystemMaxUse=1G`; the 80% WARN reaches the external alert from OBS-01. Box-side, applied by the owner.
@@ -119,9 +119,9 @@
 - [ ] **WEB-07: add HSTS on `hippo.sarna.rocks`** [quick] — live headers carry nosniff, `X-Frame-Options: DENY` and Referrer-Policy, but no `Strict-Transport-Security`.
   - **Done:** `Strict-Transport-Security "max-age=31536000"` in the site's `header` block in the live Caddyfile and the repo `Caddyfile`; `caddy validate` then reload; `curl -sI` shows it.
   - **Where:** repo `Caddyfile`; the box's Caddy config.
-- [ ] **OBS-01 + SRV-06: external uptime and certificate monitor that alerts** [quick] — the only probe runs on the box against `localhost`, and nothing alerts on certificate expiry.
+- [ ] **OBS-01: make the external uptime and certificate probe alert someone** [quick] — a laptop-side monitor already probes `/health` and the certificate (14-day warning) four times a day from outside Hetzner, but it has no notifier, reports only into the next morning's briefing, and stops while the laptop sleeps. SRV-06 is UNKNOWN, pending the registrar check.
   - **Helps:** indirect. When the server goes dark at night, I hear about it before an AI session quietly runs without memory.
-  - **Done:** an external HTTPS monitor on `/health` that notifies the owner within 10 minutes, plus a certificate-expiry warning under 14 days; registrar auto-renew confirmed (the owner question in the report). Free tier, nothing paid.
+  - **Done:** a down `/health` or a certificate under 14 days notifies the owner within 10 minutes, including while the laptop sleeps (push from the existing probe plus a hosted or box-independent probe); registrar auto-renew confirmed (the owner question in the report). Free tier, nothing paid.
   - **Assumes:** coordinates with the ops-kit alert-sink decision in HQ (verify that decision first, so this does not build a second sink).
 - [ ] **OBS-02: grouped error visibility without logging content** [session] — errors go only to `console.error` and `docker logs`.
   - **Done:** errors are counted by class (tool name plus error class, never message text that could carry memory content) and exposed in `/health` or the box metrics, so a recurring failure is visible without reading logs; Security Rules respected (no content, tokens or embeddings).
