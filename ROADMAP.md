@@ -106,7 +106,7 @@
   - **Locked:** the transformers 4.2.0 hold (D24) stays; its bump is the separate Housekeeping item.
   - **Assumes:** `better-sqlite3-multiple-ciphers@11.10.0` ships a prebuilt binary for the new Node ABI, or builds in the builder stage (verify: `docker build` locally before deploy); SDK 1.32 keeps `WebStandardStreamableHTTPServerTransport` and the 404-on-unknown-session behaviour (verify: `tests/mcp-session.test.ts`).
   - **Where:** `Dockerfile`, `package.json`, `package-lock.json`, `CHANGELOG.md`.
-- [ ] **SRV-03: make SSH key-only on the hippo box** [quick] — `sshd -T` gives `passwordauthentication yes` (compiled default). Mitigated today because every login-shell account has a locked password.
+- [x] **SRV-03: make SSH key-only on the hippo box** [quick] — *done 2026-10-22 by the owner; re-run: password-only login refused, key login works.* — `sshd -T` gives `passwordauthentication yes` (compiled default). Mitigated today because every login-shell account has a locked password.
   - **Done:** a drop-in in `sshd_config.d` with `PasswordAuthentication no`; `sshd -t` passes; reload (not restart) with a second session kept open; `sshd -T` shows `no`.
   - **Where:** the box only. Owner applies it; the audit stays read-only.
 - [ ] **WEB-01: validate and bound the OAuth routes** [quick] — `/register` bodies are unvalidated, unauthenticated and unthrottled, registered clients never expire (`src/db/oauth.ts:96-97` purges codes and tokens only), and no layer caps request bodies, so a pre-auth request can make the process buffer an arbitrary body (code-read lead, not exercised).
