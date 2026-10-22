@@ -158,6 +158,23 @@ GPG_RECIPIENTS="$REC $DRL" GNUPGHOME="$T/gpg-pub" BACKUP_STAGING="$T/rebuilt-sta
 n_rebuilt=$(ls "$T/rebuilt-off"/hippo-*.tar.gpg | wc -l | tr -d ' ')
 [ "$n_rebuilt" = 4 ] && ok "rebuilt box: offsite history kept (3 old + 1 new)" || bad "rebuilt box: offsite has $n_rebuilt bundles: $(ls "$T/rebuilt-off" | tr '\n' ' ')"
 
+# An expired bundle on a night the offsite step fails must be retried, not orphaned
+# offsite. Night 1: the offsite target is unwritable, so the mirror fails. Night 2: it works.
+mkdir -p "$T/n-staging" "$T/n-off"; cp "$GOOD" "$T/n-staging/hippo-2020-01-01-020000.tar.gpg"
+cp "$GOOD" "$T/n-off/hippo-2020-01-01-020000.tar.gpg"
+# Night 1's target sits under a regular FILE, so it cannot be created. Not chmod 555:
+# macOS openrsync's -a copies the source dir's mode onto the target and undoes it.
+: > "$T/n-blocked"
+night() { GPG_RECIPIENTS="$REC $DRL" GNUPGHOME="$T/gpg-pub" BACKUP_STAGING="$T/n-staging" \
+  BACKUP_REMOTE="${NIGHT_REMOTE:-$T/n-off}" SNAPSHOT_RUNNER=host HOST_SNAPSHOT_DIR="$T/data" HOST_NODE_CWD="$REPO" \
+  RETENTION=1 RETENTION_DAYS=14 HIPPO_PASSPHRASE="$LIVE_PASSPHRASE" bash "$B/hippo-backup.sh"; }
+NIGHT_REMOTE="$T/n-blocked/off" night > "$T/n1.out" 2>&1 && bad "night 1 should fail (offsite unwritable)" || ok "night 1: mirror fails"
+[ -f "$T/n-staging/hippo-2020-01-01-020000.tar.gpg" ] && ok "night 1: expired bundle kept locally for the retry" || bad "night 1: expired bundle already gone locally"
+sleep 1
+night > "$T/n2.out" 2>&1 || { bad "night 2 run"; cat "$T/n2.out"; }
+[ ! -f "$T/n-off/hippo-2020-01-01-020000.tar.gpg" ] && [ ! -f "$T/n-staging/hippo-2020-01-01-020000.tar.gpg" ] \
+  && ok "night 2: expired bundle removed offsite and locally" || bad "night 2: expired bundle left: $(ls "$T/n-off" "$T/n-staging" | tr '\n' ' ')"
+
 # --- prune: two ancient bundles + the real one, RETENTION=1 / 14 days → ancient ones go,
 # then a second run keeps both real bundles because they are inside the day window.
 cp "$GOOD" "$T/staging/hippo-2020-01-01-020000.tar.gpg"; cp "$GOOD" "$T/staging/hippo-2020-01-02-020000.tar.gpg"
