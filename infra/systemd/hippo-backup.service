@@ -1,0 +1,16 @@
+# Hippocampus nightly backup (D27). Installed on the hippo box from
+# /opt/hippocampus/infra/systemd/. Runs as root: it needs the docker socket.
+[Unit]
+Description=Hippocampus nightly encrypted backup, mirrored offsite
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hippocampus/infra/backup/hippo-backup.sh
+Nice=10
+IOSchedulingClass=idle
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+TimeoutStartSec=30min

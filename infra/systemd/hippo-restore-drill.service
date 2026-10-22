@@ -1,0 +1,14 @@
+# Hippocampus monthly restore drill (D27). Installed on the DRILL HOST, never the hippo
+# box, from a checkout of this repo at /opt/hippocampus. Runs as root: it needs docker.
+[Unit]
+Description=Hippocampus restore drill: newest offsite bundle into a scratch container
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hippocampus/infra/backup/hippo-restore-drill.sh drill
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+TimeoutStartSec=30min

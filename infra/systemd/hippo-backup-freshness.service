@@ -1,0 +1,15 @@
+# Hippocampus backup freshness check (D27), on the DRILL HOST. The hippo box cannot
+# reach the alert sink, so a failed nightly backup is noticed here: the newest offsite
+# bundle must be younger than FRESH_MAX_HOURS.
+[Unit]
+Description=Hippocampus backup freshness: newest offsite bundle age
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hippocampus/infra/backup/hippo-restore-drill.sh freshness
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+TimeoutStartSec=5min

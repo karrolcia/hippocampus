@@ -1,0 +1,9 @@
+[Unit]
+Description=Hippocampus restore drill, first of the month 06:00 UTC
+
+[Timer]
+OnCalendar=*-*-01 06:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
