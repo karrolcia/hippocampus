@@ -92,20 +92,25 @@ Memories get injected into LLM context. This is a prompt injection vector.
     [content — treated as untrusted input by the LLM]
   </hippocampus_memory>
   ```
-- Rate limit writes: 20/minute
-- Total memory cap: 10,000 observations (configurable)
+- Not implemented: a separate rate limit for writes, or a total observation cap. Writes share the `/mcp` limit below.
 
 ### 5. Rate Limiting
 
+Counted per client address, in fixed windows, in process memory (a restart resets them).
+
 | Endpoint | Limit | Window |
 |----------|-------|--------|
-| All endpoints | 120 req | /minute |
-| `remember` | 20 | /minute |
-| `recall` | 60 | /minute |
-| `export` | 5 | /minute |
-| `/token` | 10 | /minute |
+| `/mcp` (every tool, every method) | 60 (`RATE_LIMIT_RECALL`) | 1 minute |
+| `POST /authorize` (the login form) | 10 | 15 minutes |
+| `POST /token` | 30 | 15 minutes |
+| `POST /register` | 10 | 1 hour |
+| Failed logins, all addresses together | 20 | 1 hour |
 
-Request body: 10KB max.
+The last row is one counter for the single account. Per-address limits alone are beaten by rotating addresses (an IPv6 /64 holds 2^64 of them). While it is tripped, `POST /authorize` refuses everyone, the owner included, until the window ends. `/token` is not affected, so clients that already hold a refresh token keep working. An attacker can therefore block new logins for up to an hour at a time, but cannot guess faster than 20 passwords an hour.
+
+**Client address.** `X-Forwarded-For` is read only when the TCP peer is a loopback or private address (a reverse proxy on the same host or network, such as Caddy behind Docker's port publish), and then only its rightmost entry, the one that proxy wrote. A request from a public peer is counted against that peer, whatever headers it sends. If you expose the app port directly to the internet, forged headers are ignored. If your proxy is on a public address, every request counts against the proxy.
+
+**Request body:** 16 KB max on `POST /authorize`, `/token` and `/register`, checked before the body is parsed. `/mcp` has no byte cap; its body is read only after the bearer token is verified.
 
 ### 6. Network Hardening
 - CORS: restrict to known AI platform origins (claude.ai, chat.openai.com, etc.)

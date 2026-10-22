@@ -477,8 +477,7 @@ For systematic first-session extraction, the `onboard` tool returns a structured
 | `HIPPO_OAUTH_ISSUER` | No | — | Your server URL — enables OAuth |
 | `HIPPO_OAUTH_USER` | No | — | OAuth login username |
 | `HIPPO_OAUTH_PASSWORD_HASH` | No | — | SHA-256 hash of OAuth password |
-| `RATE_LIMIT_REMEMBER` | No | `20` | Write rate limit per minute |
-| `RATE_LIMIT_RECALL` | No | `60` | Read rate limit per minute |
+| `RATE_LIMIT_RECALL` | No | `60` | `/mcp` requests per minute per client address (all tools) |
 | `HIPPO_CONTEXT_MAX_OBSERVATIONS` | No | `100` | Max observations in `hippocampus://context` resource |
 | `TRANSFORMERS_CACHE` | No | System default | Embedding model cache directory |
 
@@ -487,7 +486,8 @@ For systematic first-session extraction, the `onboard` tool returns a structured
 - AES-256 database encryption via SQLCipher (text, embeddings, indexes — everything)
 - OAuth 2.1 with PKCE for remote access
 - Input validation: 50,000 char/memory, 200 char/entity name
-- Rate limiting on all endpoints
+- Rate limiting on `/mcp` and, more tightly, on the OAuth login, token and registration routes, plus a global cap on failed logins (limits in SECURITY.md)
+- 16 KB body cap on the OAuth routes
 - `PRAGMA secure_delete = ON` — forgotten memories are zeroed, not just unlinked
 - Non-root Docker, `cap_drop: ALL`, read-only filesystem
 - CORS restricted to known AI platform origins

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { html } from 'hono/html';
+import { bodyLimit } from 'hono/body-limit';
 import { randomUUID, createHash, timingSafeEqual } from 'crypto';
 import type { Context, Next } from 'hono';
 import { config } from '../config.js';
@@ -9,10 +10,30 @@ import {
   createToken, getToken, deleteToken,
   deleteExpiredOAuthData,
 } from '../db/oauth.js';
+import { createRateLimiter, createFailureCounter } from '../middleware/rate-limit.js';
 
 const ACCESS_TOKEN_TTL = 60 * 60 * 1000; // 1 hour
 const REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 const AUTH_CODE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Pre-auth limits on the OAuth routes (D26). Login-shaped: a small budget per
+// client address over a long window, far below /mcp's 60 a minute. Hard-coded,
+// not env: compose forwards an unset var as "", which z.coerce.number() reads
+// as 0, and a limit of 0 refuses every login.
+export const OAUTH_LIMITS = {
+  authorize: { max: 10, windowMs: 15 * 60 * 1000 },
+  token: { max: 30, windowMs: 15 * 60 * 1000 },
+  register: { max: 10, windowMs: 60 * 60 * 1000 },
+  // Wrong passwords across ALL addresses. Per-address limits alone are beaten
+  // by rotating addresses. While tripped, POST /authorize refuses everyone,
+  // the owner included; /token keeps working, so existing sessions refresh.
+  loginFailures: { max: 20, windowMs: 60 * 60 * 1000 },
+} as const;
+
+// Checked before any OAuth handler parses a body. These bodies are a few
+// hundred bytes; nothing else bounds a pre-auth request (no Caddy
+// request_body limit, and @hono/node-server does not cap the body).
+export const OAUTH_BODY_LIMIT_BYTES = 16 * 1024;
 
 function sha256(input: string): string {
   return createHash('sha256').update(input).digest('base64url');
@@ -20,6 +41,23 @@ function sha256(input: string): string {
 
 export function createOAuthRoutes(): Hono {
   const oauth = new Hono();
+
+  // Per-instance state, so each createOAuthRoutes() starts with clean counters.
+  const authorizeLimit = createRateLimiter(OAUTH_LIMITS.authorize.max, OAUTH_LIMITS.authorize.windowMs);
+  const tokenLimit = createRateLimiter(OAUTH_LIMITS.token.max, OAUTH_LIMITS.token.windowMs);
+  const registerLimit = createRateLimiter(OAUTH_LIMITS.register.max, OAUTH_LIMITS.register.windowMs);
+  const loginFailures = createFailureCounter(OAUTH_LIMITS.loginFailures.max, OAUTH_LIMITS.loginFailures.windowMs);
+  const bodyCap = bodyLimit({
+    maxSize: OAUTH_BODY_LIMIT_BYTES,
+    onError: (c) => c.json({ error: 'invalid_request', error_description: 'Request body too large' }, 413),
+  });
+  const loginLockout = async (c: Context, next: Next) => {
+    const retryAfter = loginFailures.blocked();
+    if (retryAfter !== null) {
+      return c.json({ error: 'Too many failed logins', retryAfter }, 429);
+    }
+    await next();
+  };
 
   // Resource metadata (RFC 9470)
   oauth.get('/.well-known/oauth-protected-resource/mcp', (c) => {
@@ -46,7 +84,7 @@ export function createOAuthRoutes(): Hono {
   });
 
   // Dynamic client registration (RFC 7591)
-  oauth.post('/register', async (c) => {
+  oauth.post('/register', registerLimit, bodyCap, async (c) => {
     const body = await c.req.json();
     const clientId = randomUUID();
     const redirectUris = body.redirect_uris || [];
@@ -111,7 +149,7 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
 </form></body></html>`);
   });
 
-  oauth.post('/authorize', async (c) => {
+  oauth.post('/authorize', authorizeLimit, loginLockout, bodyCap, async (c) => {
     const body = await c.req.parseBody();
     const clientId = body['client_id'] as string;
     const redirectUri = body['redirect_uri'] as string;
@@ -138,6 +176,7 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
       timingSafeEqual(Buffer.from(passwordHash), Buffer.from(expectedHash));
 
     if (username !== config.oauthUser || !hashesMatch) {
+      loginFailures.record();
       return c.html('<html><body><h1>Invalid credentials</h1><a href="javascript:history.back()">Try again</a></body></html>', 401);
     }
 
@@ -153,7 +192,7 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
   });
 
   // Token endpoint
-  oauth.post('/token', async (c) => {
+  oauth.post('/token', tokenLimit, bodyCap, async (c) => {
     const body = await c.req.parseBody();
     const grantType = body['grant_type'] as string;
 
