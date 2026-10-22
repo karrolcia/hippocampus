@@ -67,7 +67,7 @@ Open-source, self-hosted MCP memory server. Universal memory across Claude, Chat
 
 ## Security Rules
 - NEVER log memory content, observation text, embeddings, tokens, or passphrase
-- All endpoints behind rate limiting
+- Rate limiting on `/mcp` and on `POST /authorize`, `/token`, `/register`, plus a global failed-login cap (D26; limits in SECURITY.md §5). `/health`, `GET /authorize` and `.well-known` are unlimited
 - Input validation: 50,000 char max per memory, 200 char max entity name
 - `PRAGMA secure_delete = ON` for forget operations
 - Non-root Docker, cap_drop ALL, read-only filesystem (except /data)

@@ -477,7 +477,7 @@ For systematic first-session extraction, the `onboard` tool returns a structured
 | `HIPPO_OAUTH_ISSUER` | No | — | Your server URL — enables OAuth |
 | `HIPPO_OAUTH_USER` | No | — | OAuth login username |
 | `HIPPO_OAUTH_PASSWORD_HASH` | No | — | SHA-256 hash of OAuth password |
-| `RATE_LIMIT_RECALL` | No | `60` | `/mcp` requests per minute per client address (all tools) |
+| `RATE_LIMIT_RECALL` | No | `60` | `/mcp` requests per minute per client address (all tools). Not forwarded by `docker-compose.yml`, so under compose the default applies |
 | `HIPPO_CONTEXT_MAX_OBSERVATIONS` | No | `100` | Max observations in `hippocampus://context` resource |
 | `TRANSFORMERS_CACHE` | No | System default | Embedding model cache directory |
 

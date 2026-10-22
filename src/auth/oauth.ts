@@ -26,7 +26,9 @@ export const OAUTH_LIMITS = {
   register: { max: 10, windowMs: 60 * 60 * 1000 },
   // Wrong passwords across ALL addresses. Per-address limits alone are beaten
   // by rotating addresses. While tripped, POST /authorize refuses everyone,
-  // the owner included; /token keeps working, so existing sessions refresh.
+  // the owner included, and an attacker can keep it tripped indefinitely;
+  // /token keeps working and rotates the refresh token, so connected clients
+  // never need the form. Only new connectors are blocked.
   loginFailures: { max: 20, windowMs: 60 * 60 * 1000 },
 } as const;
 
@@ -149,7 +151,7 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
 </form></body></html>`);
   });
 
-  oauth.post('/authorize', authorizeLimit, loginLockout, bodyCap, async (c) => {
+  oauth.post('/authorize', loginLockout, authorizeLimit, bodyCap, async (c) => {
     const body = await c.req.parseBody();
     const clientId = body['client_id'] as string;
     const redirectUri = body['redirect_uri'] as string;
@@ -168,6 +170,15 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
     // Verify credentials
     if (!config.oauthUser || !config.oauthPasswordHash) {
       return c.json({ error: 'server_error', error_description: 'OAuth credentials not configured' }, 500);
+    }
+
+    // Re-check here, not only in loginLockout: requests in flight together all
+    // passed that check before any of them recorded a failure (the hunter
+    // review sent 200 concurrently and all 200 were evaluated). From this line
+    // to record() the code is synchronous, so check and increment are atomic.
+    const retryAfter = loginFailures.blocked();
+    if (retryAfter !== null) {
+      return c.json({ error: 'Too many failed logins', retryAfter }, 429);
     }
 
     const passwordHash = sha256(password);

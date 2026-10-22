@@ -139,7 +139,7 @@ describe('OAuth route rate limits (D26)', () => {
     assert.equal((await oauth.request('/authorize', prepended(), from(PROXY_PEER))).status, 429);
   });
 
-  test('IPv4-mapped proxy peers are recognised as trusted', () => {
+  test('isTrustedProxyPeer accepts loopback/private/ULA and rejects public or reserved look-alikes', () => {
     assert.equal(isTrustedProxyPeer('172.18.0.1'), true);
     assert.equal(isTrustedProxyPeer('127.0.0.1'), true);
     assert.equal(isTrustedProxyPeer('::1'), true);
@@ -147,6 +147,10 @@ describe('OAuth route rate limits (D26)', () => {
     assert.equal(isTrustedProxyPeer('203.0.113.7'), false);
     assert.equal(isTrustedProxyPeer('172.32.0.1'), false);
     assert.equal(isTrustedProxyPeer('2001:db8::1'), false);
+    assert.equal(isTrustedProxyPeer('fe80::1%eth0'), true);
+    // 0x00fc / 0x0fe8 first hextets: not ULA or link-local.
+    assert.equal(isTrustedProxyPeer('fc::1'), false);
+    assert.equal(isTrustedProxyPeer('fe8::1'), false);
   });
 
   test('a ::ffff:-mapped proxy peer reads X-Forwarded-For like the plain address', async () => {
@@ -191,6 +195,15 @@ describe('global failed-login cap (D26)', () => {
     // /token is not locked, so existing sessions can still refresh.
     const token = await oauth.request('/token', form({ grant_type: 'refresh_token', refresh_token: 'nope' }), rotating(max + 2));
     assert.notEqual(token.status, 429);
+  });
+
+  test('concurrent wrong passwords cannot overrun the cap', async () => {
+    const { max } = OAUTH_LIMITS.loginFailures;
+    const burst = await Promise.all(Array.from({ length: max * 5 }, (_, i) =>
+      oauth.request('/authorize', login(clientId, 'wrong'), rotating(i + 1))));
+    const evaluated = burst.filter((r) => r.status === 401).length;
+    assert.equal(evaluated, max, `passwords evaluated in a ${max * 5}-request burst`);
+    assert.ok(burst.every((r) => r.status === 401 || r.status === 429));
   });
 
   test('control: below the cap a correct password still logs in', async () => {

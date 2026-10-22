@@ -30,7 +30,7 @@ export function isTrustedProxyPeer(address: string): boolean {
   }
   if (isIP(address) === 6) {
     const lower = address.toLowerCase();
-    return lower === '::1' || /^f[cd]/.test(lower) || /^fe[89ab]/.test(lower);
+    return lower === '::1' || /^f[cd][0-9a-f]{2}:/.test(lower) || /^fe[89ab][0-9a-f]:/.test(lower);
   }
   return false;
 }
