@@ -30,7 +30,7 @@
   - **Helps:** indirect. Every agent and briefing reads Hippo, and a disk loss without a working restore loses all of it.
   - **Done:** one real bundle exists offsite and one real drill of it PASSED, both dated in `drill.log`; the three timers are enabled; `SECURITY.md`'s two backup boxes are ticked with those dates.
   - **Learn:** the drill's monthly PASS/FAIL and counts in `drill.log`; any freshness alert means a nightly backup did not land.
-  - **Blocked on:** the ops-kit ntfy sink URL on the drill host (ops-kit 4b session). Until it exists, alerts print to the journal.
+  - **Alerts (chief-of-staff D-087):** the drill host loads its live `/etc/ops-kit.env` (local tailnet ntfy). The hippo box pages backup FAILs only, through `/etc/ops-kit.env` on hippo (public ntfy.sh path), which is ops-kit runbook step 4 and not yet installed. Until then a failed backup is caught by the drill host's freshness check.
 
 ## Next
 - [ ] **SEC-06, second half: automation reaches the box as `root` over ssh — give it a non-root user (security)** [session]. The scoped tokens (D28) bound what an agent can do through `/mcp`; nothing bounds what anything holding the box's ssh key can do, and every ssh path to the box logs in as `root`. Inventory 2026-10-23 (local sources, read-only; re-verify on the box before acting):

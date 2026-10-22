@@ -11,7 +11,7 @@
 #       at snapshot time → PASS / FAIL.
 #   hippo-restore-drill.sh freshness                daily: the newest offsite bundle
 #       must be younger than FRESH_MAX_HOURS. This is how a failed nightly backup on
-#       the hippo box gets noticed, since that box cannot reach the alert sink.
+#       the hippo box gets noticed even when its own page does not arrive.
 #
 # "Against live": the manifest IS live at snapshot time (counted from the snapshot the
 # moment it was taken, inside the running container). Comparing against the live db
@@ -29,6 +29,11 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CONFIG=${DRILL_CONFIG:-/etc/hippocampus-drill/drill.env}
 # shellcheck disable=SC1090
 [ -f "$CONFIG" ] && . "$CONFIG"
+
+# ops-kit's alert config (ALERT_WEBHOOK_URL, NOTIFY_FORMAT, token). notify.sh reads env
+# only, so it is loaded with set -a to export every name to the notifier's process.
+OPSKIT_ENV=${OPSKIT_ENV:-/etc/ops-kit.env}
+if [ -r "$OPSKIT_ENV" ]; then set -a; . "$OPSKIT_ENV"; set +a; fi
 
 mode=${1:-drill}
 bundle_arg=${2:-}

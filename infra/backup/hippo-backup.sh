@@ -13,9 +13,9 @@
 #     --delete (an empty staging dir on a rebuilt box would wipe the offsite history);
 #   - the bundle is durable locally BEFORE the mirror, so a failed mirror costs nothing
 #     (it ships on the next run) but still exits non-zero, so the unit shows `failed`;
-#   - this box cannot reach the alert sink (not on the tailnet), so a failure here is
-#     surfaced by the drill host's daily freshness check (hippo-restore-drill.sh
-#     freshness), which alerts when the newest offsite bundle is too old.
+#   - a failure pages through ops-kit's notify.sh when NOTIFY is set (public ntfy.sh path:
+#     this box is not on the tailnet the main sink sits on), and the drill host's daily
+#     freshness check is the backstop when it does not.
 #
 # Encryption, two layers:
 #   1. The database file itself is encrypted by the app (SQLite3MultipleCiphers,
@@ -34,9 +34,28 @@ CONFIG=${BACKUP_CONFIG:-/etc/hippocampus/backup.env}
 # shellcheck disable=SC1090
 [ -f "$CONFIG" ] && . "$CONFIG"
 
+# ops-kit's alert config (ALERT_WEBHOOK_URL, NOTIFY_FORMAT, token). notify.sh reads env
+# only, so it is loaded with set -a to export every name to the notifier's process.
+OPSKIT_ENV=${OPSKIT_ENV:-/etc/ops-kit.env}
+if [ -r "$OPSKIT_ENV" ]; then set -a; . "$OPSKIT_ENV"; set +a; fi
+NOTIFY=${NOTIFY:-}
+
 # printf only, never tee: a tee inside log() under pipefail can end the run silently.
 log()  { printf '%s  %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
-fail() { log "FAIL: $*"; exit 1; }
+# Pages on FAIL only, never on success: this box pages through the public ntfy.sh path,
+# whose daily message budget is shared with the dead-man's switch (chief-of-staff D-087).
+# A delivery failure never changes the exit code; the drill host's freshness check is the
+# backstop either way.
+fail() {
+  log "FAIL: $*"
+  if [ -n "$NOTIFY" ] && [ -x "$NOTIFY" ]; then
+    NOTIFY_SOURCE="hippo-backup" NOTIFY_FINGERPRINT="hippo-backup:fail" \
+      "$NOTIFY" error "hippo backup FAIL" "$*" >/dev/null 2>&1 || log "WARN: alert delivery failed"
+  elif [ -n "$NOTIFY" ]; then
+    log "WARN: NOTIFY=${NOTIFY} is not executable; this failure is in the journal only"
+  fi
+  exit 1
+}
 
 : "${GPG_RECIPIENTS:?set GPG_RECIPIENTS (space-separated fingerprints: recovery + drill)}"
 : "${GNUPGHOME:?set GNUPGHOME (holds the two PUBLIC keys only)}"
