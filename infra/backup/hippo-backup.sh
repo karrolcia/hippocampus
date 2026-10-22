@@ -9,7 +9,7 @@
 # infra/backup/appkeep-backup.sh. Fail loud, fail closed:
 #   - every step's exit code and output is checked; a partial bundle is never shipped
 #     or allowed to displace a good one in the prune;
-#   - offsite deletion is limited to the names this run's prune removed, never a blanket
+#   - offsite deletion is limited to the names this run expires, never a blanket
 #     --delete (an empty staging dir on a rebuilt box would wipe the offsite history);
 #   - the bundle is durable locally BEFORE the mirror, so a failed mirror costs nothing
 #     (it ships on the next run) but still exits non-zero, so the unit shows `failed`;
@@ -140,7 +140,9 @@ elif [ "$count" -gt "$RETENTION" ]; then
     s=${f##*/hippo-}; s=${s%.tar.gpg}; s=$(printf '%s' "$s" | tr -d '-')
     case "$s" in ''|*[!0-9]*) log "keep  ${f##*/} (unparseable stamp)"; continue ;; esac
     [ "${#s}" -eq 14 ] || { log "keep  ${f##*/} (stamp not 14 digits)"; continue; }
-    [ "$s" -lt "$cutoff" ] && expired+=("${f##*/}")
+    # Never the bundle this run just made, whatever the clock or a stray name says.
+    [ "${f##*/}" = "$name" ] && continue
+    if [ "$s" -lt "$cutoff" ]; then expired+=("${f##*/}"); fi
   done
 fi
 

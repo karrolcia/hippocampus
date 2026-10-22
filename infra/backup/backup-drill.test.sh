@@ -158,22 +158,40 @@ GPG_RECIPIENTS="$REC $DRL" GNUPGHOME="$T/gpg-pub" BACKUP_STAGING="$T/rebuilt-sta
 n_rebuilt=$(ls "$T/rebuilt-off"/hippo-*.tar.gpg | wc -l | tr -d ' ')
 [ "$n_rebuilt" = 4 ] && ok "rebuilt box: offsite history kept (3 old + 1 new)" || bad "rebuilt box: offsite has $n_rebuilt bundles: $(ls "$T/rebuilt-off" | tr '\n' ' ')"
 
-# An expired bundle on a night the offsite step fails must be retried, not orphaned
-# offsite. Night 1: the offsite target is unwritable, so the mirror fails. Night 2: it works.
-mkdir -p "$T/n-staging" "$T/n-off"; cp "$GOOD" "$T/n-staging/hippo-2020-01-01-020000.tar.gpg"
+# Expiry must survive a failing offsite step: the local copy is what selects a bundle, so
+# it may only go after the offsite delete succeeded. Failures are injected with an rsync
+# shim on PATH, so they hit the rsync calls themselves (a real ssh remote takes the same
+# path). Night 1: the mirror push fails. Night 2: the push works, the offsite delete fails.
+# Night 3: everything works and the expired bundle goes on both sides.
+mkdir -p "$T/n-staging" "$T/n-off" "$T/shim"; cp "$GOOD" "$T/n-staging/hippo-2020-01-01-020000.tar.gpg"
 cp "$GOOD" "$T/n-off/hippo-2020-01-01-020000.tar.gpg"
-# Night 1's target sits under a regular FILE, so it cannot be created. Not chmod 555:
-# macOS openrsync's -a copies the source dir's mode onto the target and undoes it.
-: > "$T/n-blocked"
-night() { GPG_RECIPIENTS="$REC $DRL" GNUPGHOME="$T/gpg-pub" BACKUP_STAGING="$T/n-staging" \
-  BACKUP_REMOTE="${NIGHT_REMOTE:-$T/n-off}" SNAPSHOT_RUNNER=host HOST_SNAPSHOT_DIR="$T/data" HOST_NODE_CWD="$REPO" \
+REAL_RSYNC=$(command -v rsync)
+cat > "$T/shim/rsync" <<SHIM
+#!/usr/bin/env bash
+case "\$SHIM_FAIL:\$*" in
+  push:*--delete*) ;;
+  push:*) exit 23 ;;
+  delete:*--delete*) exit 23 ;;
+esac
+exec "$REAL_RSYNC" "\$@"
+SHIM
+chmod +x "$T/shim/rsync"
+night() { PATH="$T/shim:$PATH" GPG_RECIPIENTS="$REC $DRL" GNUPGHOME="$T/gpg-pub" BACKUP_STAGING="$T/n-staging" \
+  BACKUP_REMOTE="$T/n-off" SNAPSHOT_RUNNER=host HOST_SNAPSHOT_DIR="$T/data" HOST_NODE_CWD="$REPO" \
   RETENTION=1 RETENTION_DAYS=14 HIPPO_PASSPHRASE="$LIVE_PASSPHRASE" bash "$B/hippo-backup.sh"; }
-NIGHT_REMOTE="$T/n-blocked/off" night > "$T/n1.out" 2>&1 && bad "night 1 should fail (offsite unwritable)" || ok "night 1: mirror fails"
-[ -f "$T/n-staging/hippo-2020-01-01-020000.tar.gpg" ] && ok "night 1: expired bundle kept locally for the retry" || bad "night 1: expired bundle already gone locally"
+OLD=hippo-2020-01-01-020000.tar.gpg
+both() { [ -f "$T/n-staging/$OLD" ] && [ -f "$T/n-off/$OLD" ]; }
+SHIM_FAIL=push night > "$T/n1.out" 2>&1 && bad "night 1 should fail" || true
+grep -q 'FAIL: offsite mirror failed' "$T/n1.out" && both \
+  && ok "night 1: push fails, expired bundle kept on both sides" || { bad "night 1"; tail -3 "$T/n1.out"; }
 sleep 1
-night > "$T/n2.out" 2>&1 || { bad "night 2 run"; cat "$T/n2.out"; }
-[ ! -f "$T/n-off/hippo-2020-01-01-020000.tar.gpg" ] && [ ! -f "$T/n-staging/hippo-2020-01-01-020000.tar.gpg" ] \
-  && ok "night 2: expired bundle removed offsite and locally" || bad "night 2: expired bundle left: $(ls "$T/n-off" "$T/n-staging" | tr '\n' ' ')"
+SHIM_FAIL=delete night > "$T/n2.out" 2>&1 || { bad "night 2 run"; tail -3 "$T/n2.out"; }
+grep -q 'WARN: offsite prune failed' "$T/n2.out" && both \
+  && ok "night 2: offsite delete fails, kept on both sides for the retry" || { bad "night 2"; tail -3 "$T/n2.out"; }
+sleep 1
+SHIM_FAIL= night > "$T/n3.out" 2>&1 || { bad "night 3 run"; tail -3 "$T/n3.out"; }
+[ ! -f "$T/n-off/$OLD" ] && [ ! -f "$T/n-staging/$OLD" ] \
+  && ok "night 3: expired bundle removed offsite and locally" || bad "night 3: $(ls "$T/n-off" "$T/n-staging" | tr '\n' ' ')"
 
 # --- prune: two ancient bundles + the real one, RETENTION=1 / 14 days → ancient ones go,
 # then a second run keeps both real bundles because they are inside the day window.
