@@ -68,6 +68,66 @@
 - **R5 — `kind` in export markdown / obsidian** (cosmetic).
 - **Docs / positioning drift.** (a) The v0.4.0 "Memory is a feature. Continuity is the product." positioning lives only in memory + the launch post — decide whether README/PRODUCT should adopt it. (b) `docs/spec-agent-continuity.md` still reads Phase 1 as planned; it's executed (2026-04-15) — add a dated status line.
 
+## Next — prod-check FAILs (2026-10-22 quick run, D25; report `docs/prod-check-2026-10-22.md`)
+*One item per FAIL, in the report's severity order (exposure, then loss, then availability, then the rest). Every fix lands only on the owner's go, one at a time, followed by a re-run of that row. Signal for the whole block: the count of FAIL on `launch` rows in the next quick run. It should reach 0, and a rise means a regression shipped.*
+
+- [ ] **AUTH-05: rate-limit the login and token endpoints** [quick] — `createRateLimiter` is mounted on `/mcp` only (`src/index.ts`), so `POST /authorize`, `POST /token` and `POST /register` take unlimited requests.
+  - **Helps:** When someone tries to guess my server's password, I want them stopped after a handful of tries, so my whole memory store isn't one patient script away from theirs.
+  - **Done:** `POST /authorize` and `POST /token` return 429 after 5 requests per IP per minute, and `/register` after a looser limit; a test drives `app.request()` past the limit for each; `/mcp`'s limit is unchanged.
+  - **Assumes:** Caddy (no `trusted_proxies`) replaces a client-sent `X-Forwarded-For`, so the key is the real IP (verify: send one request with a forged XFF and read the Caddy journal's `client_ip` before relying on it).
+  - **Where:** `src/index.ts`, `src/middleware/rate-limit.ts`, `tests/`.
+- [ ] **AUTH-09: hash the OAuth password with scrypt and a salt** [session] — `POST /authorize` compares an unsalted SHA-256 (`src/auth/oauth.ts`, `sha256(password)`).
+  - **Helps:** When the env file or a backup ever leaks, I want my password to stay expensive to recover, so a leak of one file doesn't hand over the login too.
+  - **Done:** `HIPPO_OAUTH_PASSWORD_HASH` accepts `scrypt$N$r$p$salt$hash` (Node `crypto.scrypt`, no new dependency); the legacy SHA-256 form still verifies but logs a one-line warning (never the value); the README and `setup.sh` generate the new form; tests cover both forms and a wrong password; constant-time compare kept.
+  - **Locked:** no new auth dependency; the single-user env-configured model stays.
+  - **Assumes:** `setup.sh` is the only generator of the hash (verify: `grep -rn PASSWORD_HASH setup.sh README.md`).
+  - **Where:** `src/auth/oauth.ts`, `setup.sh`, `README.md`, `SECURITY.md` §2, `tests/`.
+- [ ] **SEC-06: scoped agent tokens, so a read-only consumer cannot delete** [session] — every `HIPPO_AGENT_TOKEN` entry grants every tool, including `forget`, `merge`, `merge_entities` and `update`.
+  - **Helps:** When one of my machines or scripts leaks its token, I want the damage limited to what that script needed, so a stolen briefing key can read but not wipe my memory.
+  - **Done:** each agent-token entry can carry a scope (`read`, `write`, `admin`; an unscoped entry stays `admin` for compatibility); a `read` token gets `isError` on any mutating tool, and a `write` token on `forget`/`merge`/`merge_entities`; the scope is enforced at the tool-call boundary, not only in `tools/list`; tests per scope × tool class.
+  - **Load:** D14/`STRICT_TOOLS` notes in CLAUDE.md (scope-widening hazard), `src/mcp/param-normalization.ts`, `scripts/sync-agents.ts` (a writer).
+  - **Assumes:** OAuth tokens (Claude.ai and other clients) stay full-scope, since they are the owner (verify with the owner before building).
+  - **Where:** `src/auth/oauth.ts` (`matchesAgentToken`), `src/mcp/server.ts`, `src/config.ts`, `tests/`.
+- [ ] **BKP-01: nightly encrypted off-box backup of `hippocampus.db`** [session] — nothing backs up the database today (no timer, cron or script on the box, in the repo or on the laptop; `SECURITY.md:266` unchecked).
+  - **Helps:** When the box dies, a volume is pruned or a token runs `forget` on the wrong thing, I want yesterday's memory back, so every AI I use still knows me tomorrow. (Indirect: every briefing and agent reads this store.)
+  - **Learn:** proximate signal = age of the newest off-box backup, reported in `/health` or the box metrics; over 26 h is an alert.
+  - **Done:** a nightly job runs `VACUUM INTO` (or the SQLite `.backup` API) inside the container to a dated file, so the copy is consistent rather than a raw copy of a file in use; the file is copied off-box with credentials the app container does not hold; 7 daily and 4 weekly are kept (`SECURITY.md` §10); the script is committed with an invocation note; the newest-backup age is visible somewhere the owner reads.
+  - **Locked:** the backup stays SQLCipher-encrypted (it inherits the passphrase); no plaintext export as the backup format.
+  - **Assumes:** `VACUUM INTO` works on a SQLCipher database under `better-sqlite3-multiple-ciphers` and produces a file that opens with the same passphrase (verify on a scratch DB first); the container's read-only root allows writing the dump to `/data` (verify: free space and a test file).
+  - **Where:** `scripts/` (new backup script), the box's systemd units (new timer), `SECURITY.md` §10.
+- [ ] **BKP-03: first restore drill, dated** [session] — no restore has ever been done (`SECURITY.md:274` unchecked). Depends on BKP-01.
+  - **Helps:** When I need the backup, I want to already know it opens, so the bad day doesn't also become the day I find out the passphrase or format was wrong.
+  - **Done:** the newest backup is restored into a scratch container (never prod) with the passphrase; an observation and entity count plus one `recall` match against prod; the date and commands are recorded in a runbook section; `SECURITY.md:274` ticked with that date.
+  - **Assumes:** the passphrase is held somewhere other than the box `.env` (OPS-13 question in the report; if not, that is the first fix).
+  - **Where:** `SECURITY.md`, a runbook section in `docs/`.
+- [ ] **SEC-04: move off Node 20 (EOL) and bump the MCP SDK past 1.32.0** [session] — the image runs `node:20-slim` (`v20.20.2`, upstream EOL 2026-04-30), and `@modelcontextprotocol/sdk@1.29.0` carries GHSA-46jr-4wx8-v453 (one request exhausts memory during validation; reachable after auth).
+  - **Helps:** indirect. The server keeps getting security fixes, and one bad request can't take it down for every connected AI.
+  - **Done:** `Dockerfile` both stages on Node 22 or 24 LTS, `engines` matching; SDK at >=1.32.0 by `npm update` of that package only (not `npm audit fix`, which takes the held transformers bump, D24); `git diff package-lock.json | grep '"version"'` shows nothing else moved; full suite green; deployed and verified per the CLAUDE.md deploy gotchas. Two commits.
+  - **Locked:** the transformers 4.2.0 hold (D24) stays; its bump is the separate Housekeeping item.
+  - **Assumes:** `better-sqlite3-multiple-ciphers@11.10.0` ships a prebuilt binary for the new Node ABI, or builds in the builder stage (verify: `docker build` locally before deploy); SDK 1.32 keeps `WebStandardStreamableHTTPServerTransport` and the 404-on-unknown-session behaviour (verify: `tests/mcp-session.test.ts`).
+  - **Where:** `Dockerfile`, `package.json`, `package-lock.json`, `CHANGELOG.md`.
+- [ ] **SRV-03: make SSH key-only on the hippo box** [quick] — `sshd -T` gives `passwordauthentication yes` (compiled default). Mitigated today because every login-shell account has a locked password.
+  - **Done:** a drop-in in `sshd_config.d` with `PasswordAuthentication no`; `sshd -t` passes; reload (not restart) with a second session kept open; `sshd -T` shows `no`.
+  - **Where:** the box only. Owner applies it; the audit stays read-only.
+- [ ] **WEB-01: validate and bound `POST /register`** [quick] — the body is unvalidated, uncapped, unauthenticated and unthrottled, and registered clients never expire (`src/db/oauth.ts:96-97` purges codes and tokens only).
+  - **Helps:** indirect. A stranger can't grow the encrypted DB without limit through an open endpoint.
+  - **Done:** a zod schema on `/register` (`redirect_uris`: 1-5 URL strings; `client_name` max 200); `bodyLimit` on the OAuth routes; clients with no token issued in 30 days are purged; tests for each refusal. Coordinate with the open-registration phish item above, which may change `/register` policy.
+  - **Where:** `src/auth/oauth.ts`, `src/db/oauth.ts`, `tests/`.
+- [ ] **SRV-09: scheduled build-cache prune and a journald cap on the hippo box** [quick] — 20.6 GB build cache and 18.3 GB reclaimable images with no prune job; journald at 3.9 GB, uncapped beyond the default; the 80% disk check only writes a log line.
+  - **Done:** a weekly `docker builder prune -f` timer (zero-blip; never `system prune --volumes`); `SystemMaxUse=1G`; the 80% WARN reaches the external alert from OBS-01. Box-side, applied by the owner.
+  - **Where:** the box; `scripts/health-check.sh` (commit it per the Housekeeping item).
+- [ ] **WEB-07: add HSTS on `hippo.sarna.rocks`** [quick] — live headers carry nosniff, `X-Frame-Options: DENY` and Referrer-Policy, but no `Strict-Transport-Security`.
+  - **Done:** `Strict-Transport-Security "max-age=31536000"` in the site's `header` block in the live Caddyfile and the repo `Caddyfile`; `caddy validate` then reload; `curl -sI` shows it.
+  - **Where:** repo `Caddyfile`; the box's Caddy config.
+- [ ] **OBS-01 + SRV-06: external uptime and certificate monitor that alerts** [quick] — the only probe runs on the box against `localhost`, and nothing alerts on certificate expiry.
+  - **Helps:** indirect. When the server goes dark at night, I hear about it before an AI session quietly runs without memory.
+  - **Done:** an external HTTPS monitor on `/health` that notifies the owner within 10 minutes, plus a certificate-expiry warning under 14 days; registrar auto-renew confirmed (the owner question in the report). Free tier, nothing paid.
+  - **Assumes:** coordinates with the ops-kit alert-sink decision in HQ (verify that decision first, so this does not build a second sink).
+- [ ] **OBS-02: grouped error visibility without logging content** [session] — errors go only to `console.error` and `docker logs`.
+  - **Done:** errors are counted by class (tool name plus error class, never message text that could carry memory content) and exposed in `/health` or the box metrics, so a recurring failure is visible without reading logs; Security Rules respected (no content, tokens or embeddings).
+  - **Assumes:** the existing `isError` paths in `src/mcp/server.ts` are the single choke point (verify: the 11 catch sites D17 counted).
+  - **Where:** `src/mcp/server.ts`, `src/index.ts` (`/health`).
+
 ## Next — production-memory block (from the 2026-07-16 context-engineering talk; D2)
 
 *The talk's production principles (versioning, concurrency, permissioning, out-of-band curation) map onto primitives Hippo mostly has — these four wire them. Ordered: the first has already cost real data. The ops-side counterpart (the dreaming/curation pass) lives in `~/chief-of-staff/ROADMAP.md` #19, not here.*
