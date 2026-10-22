@@ -53,11 +53,16 @@ export function createOAuthRoutes(): Hono {
     maxSize: OAUTH_BODY_LIMIT_BYTES,
     onError: (c) => c.json({ error: 'invalid_request', error_description: 'Request body too large' }, 413),
   });
+  // The owner meets this page in a browser, at the moment their own server
+  // refuses them, so it says what happened and when to retry.
+  const lockedOut = (c: Context, retryAfter: number) => {
+    c.header('Retry-After', String(retryAfter));
+    return c.html(html`<html><body><h1>Too many failed logins</h1>
+<p>Logins to this server are paused after repeated wrong passwords from anywhere. Try again in ${Math.ceil(retryAfter / 60)} minutes. Clients that are already connected keep working.</p></body></html>`, 429);
+  };
   const loginLockout = async (c: Context, next: Next) => {
     const retryAfter = loginFailures.blocked();
-    if (retryAfter !== null) {
-      return c.json({ error: 'Too many failed logins', retryAfter }, 429);
-    }
+    if (retryAfter !== null) return lockedOut(c, retryAfter);
     await next();
   };
 
@@ -177,9 +182,7 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
     // review sent 200 concurrently and all 200 were evaluated). From this line
     // to record() the code is synchronous, so check and increment are atomic.
     const retryAfter = loginFailures.blocked();
-    if (retryAfter !== null) {
-      return c.json({ error: 'Too many failed logins', retryAfter }, 429);
-    }
+    if (retryAfter !== null) return lockedOut(c, retryAfter);
 
     const passwordHash = sha256(password);
     const expectedHash = config.oauthPasswordHash;

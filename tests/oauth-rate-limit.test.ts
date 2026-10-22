@@ -17,6 +17,7 @@ process.env.HIPPO_OAUTH_PASSWORD_HASH = createHash('sha256').update(PASSWORD).di
 const { initDatabase, closeDatabase } = await import('../src/db/index.js');
 const { createOAuthRoutes, OAUTH_LIMITS, OAUTH_BODY_LIMIT_BYTES } = await import('../src/auth/oauth.js');
 const { isTrustedProxyPeer } = await import('../src/middleware/rate-limit.js');
+const { config } = await import('../src/config.js');
 
 const REDIRECT = 'https://client.example/cb';
 const PUBLIC_PEER = '203.0.113.7';
@@ -102,9 +103,8 @@ describe('OAuth route rate limits (D26)', () => {
   });
 
   test('the OAuth limits are tighter than /mcp', () => {
-    // /mcp allows RATE_LIMIT_RECALL (default 60) per minute.
     for (const { max, windowMs } of [OAUTH_LIMITS.authorize, OAUTH_LIMITS.token, OAUTH_LIMITS.register]) {
-      assert.ok(max / (windowMs / 60_000) < 60, `${max} per ${windowMs}ms`);
+      assert.ok(max / (windowMs / 60_000) < config.rateLimitRecall, `${max} per ${windowMs}ms`);
     }
   });
 
@@ -190,8 +190,12 @@ describe('global failed-login cap (D26)', () => {
     for (let n = 1; n <= max; n++) {
       assert.equal((await oauth.request('/authorize', login(clientId, 'wrong'), rotating(n))).status, 401);
     }
-    // Fresh address, correct password: refused while the cap holds.
-    assert.equal((await oauth.request('/authorize', login(clientId, PASSWORD), rotating(max + 1))).status, 429);
+    // Fresh address, correct password: refused while the cap holds, with a
+    // page the owner can read and a Retry-After.
+    const locked = await oauth.request('/authorize', login(clientId, PASSWORD), rotating(max + 1));
+    assert.equal(locked.status, 429);
+    assert.ok(Number(locked.headers.get('retry-after')) > 0);
+    assert.match(await locked.text(), /Try again in \d+ minutes/);
     // /token is not locked, so existing sessions can still refresh.
     const token = await oauth.request('/token', form({ grant_type: 'refresh_token', refresh_token: 'nope' }), rotating(max + 2));
     assert.notEqual(token.status, 429);
