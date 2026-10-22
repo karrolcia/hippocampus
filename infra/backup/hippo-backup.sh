@@ -9,6 +9,8 @@
 # infra/backup/appkeep-backup.sh. Fail loud, fail closed:
 #   - every step's exit code and output is checked; a partial bundle is never shipped
 #     or allowed to displace a good one in the prune;
+#   - offsite deletion is limited to the names this run's prune removed, never a blanket
+#     --delete (an empty staging dir on a rebuilt box would wipe the offsite history);
 #   - the bundle is durable locally BEFORE the mirror, so a failed mirror costs nothing
 #     (it ships on the next run) but still exits non-zero, so the unit shows `failed`;
 #   - this box cannot reach the alert sink (not on the tailnet), so a failure here is
@@ -125,6 +127,7 @@ log "bundle ok: ${name} (${enc_bytes} bytes, ${enc_to} recipients)"
 # timer cadence changes). Names sort chronologically. A name that does not parse is kept.
 cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%Y%m%d%H%M%S 2>/dev/null \
   || date -u -v "-${RETENTION_DAYS}d" +%Y%m%d%H%M%S 2>/dev/null || true)
+pruned=()
 bundles=()
 for f in "${BACKUP_STAGING}"/hippo-*.tar.gpg; do [ -f "$f" ] && bundles+=("$f"); done
 count=${#bundles[@]}
@@ -138,27 +141,37 @@ elif [ "$count" -gt "$RETENTION" ]; then
     [ "${#s}" -eq 14 ] || { log "keep  ${f##*/} (stamp not 14 digits)"; continue; }
     if [ "$s" -lt "$cutoff" ]; then
       log "prune ${f##*/}"
-      rm -f "$f" || log "WARN: could not remove ${f##*/}; continuing to the mirror"
+      if rm -f "$f"; then pruned+=("${f##*/}")
+      else log "WARN: could not remove ${f##*/}; continuing to the mirror"; fi
     fi
   done
 fi
 
-# --- mirror. --delete makes the remote equal the retained local set; the include
-# filter keeps it to bundles only (the sub-account's directory holds nothing else).
-log "mirror → offsite"
+# --- mirror. Push WITHOUT --delete, then delete offsite only the names this run's prune
+# just removed locally. A blanket --delete would make the offsite set equal the local one,
+# and the local set is EMPTY on a rebuilt box: the first nightly there would delete every
+# older recovery point offsite, on the day they matter most (review finding, 2026-10-22).
+# Cost: bundles that never pass through this box's prune (e.g. from before a rebuild) stay
+# offsite until removed by hand. That is the safe direction.
+rsync_ssh=()
 case "$BACKUP_REMOTE" in
   *:*)
     : "${BACKUP_SSH_KEY:?set BACKUP_SSH_KEY}"
-    rsync -a --delete --timeout=300 \
-      --include='hippo-*.tar.gpg' --exclude='*' \
-      -e "ssh -p ${BACKUP_SSH_PORT} -i ${BACKUP_SSH_KEY} -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${BACKUP_KNOWN_HOSTS:-/etc/hippocampus/storagebox_known_hosts}" \
-      "${BACKUP_STAGING}/" "${BACKUP_REMOTE%/}/" \
-      || fail "offsite mirror failed; ${name} is safe locally and ships on the next run"
+    rsync_ssh=(--timeout=300 -e "ssh -p ${BACKUP_SSH_PORT} -i ${BACKUP_SSH_KEY} -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${BACKUP_KNOWN_HOSTS:-/etc/hippocampus/storagebox_known_hosts}")
     ;;
-  *)
-    mkdir -p "$BACKUP_REMOTE"
-    rsync -a --delete --include='hippo-*.tar.gpg' --exclude='*' \
-      "${BACKUP_STAGING}/" "${BACKUP_REMOTE%/}/" || fail "local mirror failed"
-    ;;
+  *) mkdir -p "$BACKUP_REMOTE" ;;
 esac
+log "mirror → offsite"
+rsync -a "${rsync_ssh[@]}" --include='hippo-*.tar.gpg' --exclude='*' \
+  "${BACKUP_STAGING}/" "${BACKUP_REMOTE%/}/" \
+  || fail "offsite mirror failed; ${name} is safe locally and ships on the next run"
+if [ "${#pruned[@]}" -gt 0 ]; then
+  # Delete exactly the pruned names: an empty source dir, --delete, and an include list
+  # of those names only, so nothing else offsite is eligible.
+  empty="${work}/empty"; mkdir -p "$empty"
+  incl=(); for n in "${pruned[@]}"; do incl+=(--include="$n"); done
+  rsync -r --delete "${rsync_ssh[@]}" "${incl[@]}" --exclude='*' "${empty}/" "${BACKUP_REMOTE%/}/" \
+    && log "offsite prune: ${#pruned[@]} removed" \
+    || log "WARN: offsite prune failed; ${#pruned[@]} old bundles stay offsite until the next run"
+fi
 log "DONE ${name} offsite (${enc_bytes} bytes)"
