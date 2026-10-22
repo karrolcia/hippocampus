@@ -193,6 +193,23 @@ SHIM_FAIL= night > "$T/n3.out" 2>&1 || { bad "night 3 run"; tail -3 "$T/n3.out";
 [ ! -f "$T/n-off/$OLD" ] && [ ! -f "$T/n-staging/$OLD" ] \
   && ok "night 3: expired bundle removed offsite and locally" || bad "night 3: $(ls "$T/n-off" "$T/n-staging" | tr '\n' ' ')"
 
+# Paging: the backup pages once on FAIL and never on success; the drill loads ops-kit's
+# config file and pages with its sink settings in the notifier's environment.
+cat > "$T/shim/notify" <<'NTF'
+#!/usr/bin/env bash
+printf '%s|%s|%s|%s\n' "$NOTIFY_SOURCE" "$1" "$2" "${ALERT_WEBHOOK_URL:-unset}" >> "$PAGES"
+NTF
+chmod +x "$T/shim/notify"; export PAGES="$T/pages"; : > "$PAGES"
+printf 'ALERT_WEBHOOK_URL=https://sink.test.invalid/topic\nNOTIFY_FORMAT=ntfy\n' > "$T/ops-kit.env"
+NOTIFY="$T/shim/notify" OPSKIT_ENV="$T/ops-kit.env" SHIM_FAIL=push night > /dev/null 2>&1 || true
+NOTIFY="$T/shim/notify" OPSKIT_ENV="$T/ops-kit.env" SHIM_FAIL= night > /dev/null 2>&1 || true
+[ "$(cat "$PAGES")" = "hippo-backup|error|hippo backup FAIL|https://sink.test.invalid/topic" ] \
+  && ok "backup pages once on FAIL, not on success, with ops-kit's sink" || bad "backup pages: $(cat "$PAGES" | tr '\n' ';')"
+: > "$PAGES"
+NOTIFY="$T/shim/notify" OPSKIT_ENV="$T/ops-kit.env" bash "$B/hippo-restore-drill.sh" drill "$T/trunc.tar.gpg" > /dev/null 2>&1 || true
+grep -q '^hippo-restore-drill|error|hippo drill FAIL: decrypt|https://sink.test.invalid/topic$' "$PAGES" \
+  && ok "drill pages FAIL with ops-kit's sink settings exported" || bad "drill pages: $(cat "$PAGES" | tr '\n' ';')"
+
 # --- prune: two ancient bundles + the real one, RETENTION=1 / 14 days → ancient ones go,
 # then a second run keeps both real bundles because they are inside the day window.
 cp "$GOOD" "$T/staging/hippo-2020-01-01-020000.tar.gpg"; cp "$GOOD" "$T/staging/hippo-2020-01-02-020000.tar.gpg"

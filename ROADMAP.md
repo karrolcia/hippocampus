@@ -30,7 +30,7 @@
   - **Helps:** indirect. Every agent and briefing reads Hippo, and a disk loss without a working restore loses all of it.
   - **Done:** one real bundle exists offsite and one real drill of it PASSED, both dated in `drill.log`; the three timers are enabled; `SECURITY.md`'s two backup boxes are ticked with those dates.
   - **Learn:** the drill's monthly PASS/FAIL and counts in `drill.log`; any freshness alert means a nightly backup did not land.
-  - **Blocked on:** the ops-kit ntfy sink URL on the drill host (ops-kit 4b session). Until it exists, alerts print to the journal.
+  - **Alerts (chief-of-staff D-087):** the drill host loads its live `/etc/ops-kit.env` (local tailnet ntfy). The hippo box pages backup FAILs only, through `/etc/ops-kit.env` on hippo (public ntfy.sh path), which is ops-kit runbook step 4 and not yet installed. Until then a failed backup is caught by the drill host's freshness check.
 
 ## Next
 - [ ] **The docs say SQLCipher AES-256 with 256,000 PBKDF2 iterations; the database is ChaCha20 with the driver's default KDF (security docs, D27)** [session]. Measured 2026-10-22: `PRAGMA cipher` = `chacha20` on prod and on a fresh file; `initDatabase` sets no `cipher`, and its `cipher_page_size` and `kdf_iter` come after `key`, where they do not change how the file opens. Encryption at rest still holds (authenticated ChaCha20-Poly1305), but README, SECURITY.md §3 and its "256,000 PBKDF2 iterations" line, and CLAUDE.md claim something else.
