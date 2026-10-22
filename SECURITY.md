@@ -162,9 +162,11 @@ The last row is one counter for the single account. Per-address limits alone are
 - Full wipe: delete database file entirely
 
 ### 10. Backup Security
-- Backups inherit SQLCipher encryption — safe to store anywhere
-- Store in different location than server
-- Backup rotation: 7 daily, 4 weekly
+- Nightly `VACUUM INTO` snapshot taken inside the container. The copy keeps the database's own encryption (measured: the cipher is ChaCha20, the driver default; see ROADMAP).
+- Each bundle is GPG-encrypted to two public keys, recovery and drill. Neither private key is on the server.
+- Bundles are mirrored to a separate Storage Box sub-account. Retention is 14 bundles or 14 days, whichever keeps more.
+- A monthly restore drill runs on a separate host and must match the snapshot's counts exactly.
+- Setup and the restore runbook: `infra/README.md`. Decision: `DECISIONS.md` D27.
 
 ### 11. Privacy-Aware Logging
 - **Log:** auth events, tool calls (tool name + timestamp + entity name only), errors
