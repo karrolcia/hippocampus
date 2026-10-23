@@ -108,9 +108,9 @@ export function parseAgentTokens(raw: string | undefined): ParsedAgentTokens {
       const label = trimmed.slice(0, colon).trim();
       token = trimmed.slice(colon + 1).trim();
       if (!isScope(label)) {
-        // Cap the label so a token pasted without its prefix but with a stray
-        // colon deep inside cannot be echoed into a log line in full.
-        unknownLabels.push(label.slice(0, 16));
+        // Echo the label only when it looks like one. `<hex>:read` (prefix at
+        // the wrong end) would otherwise put the start of the token in the log.
+        unknownLabels.push(/^[a-z]{1,8}$/i.test(label) ? label : '<unrecognized>');
         continue;
       }
       scope = label;

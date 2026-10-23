@@ -78,14 +78,21 @@ clients hold a single token, never the whole list.
   An out-of-scope tool is absent from `tools/list` and a call to it is
   refused in-band (`isError: true`) with a message naming the tool and both
   scopes. Resources are readable at every scope. A session is bound to the
-  scope it was created under; presenting its id with a token of another
-  scope gets 403. An entry with an unknown label (`admin:…`) never
+  SCOPE it was created under, not to the credential: presenting its id with
+  a token of another scope gets 403, while two tokens of the same scope can
+  share a session (no privilege changes, and an OAuth client keeps its
+  session across an access-token refresh). An entry with an unknown label (`admin:…`) never
   authenticates, and the server logs the label (never the token) at start.
 - `write` is "no explicit-delete tools", not "no deletion": `remember` can
   still replace a near-duplicate written the same day, and
   `remember({replace_kind: true})` deletes every observation of that kind on
   the entity. Both report the evicted text (`replaced: true`).
-- OAuth access tokens and the legacy `HIPPO_TOKEN` are `full`
+- Backwards compatibility assumes no deployed token contains a colon (the
+  mint scripts produce hex). One that does is read as `<label>:<token>` and
+  fails closed: 401, plus a startup warning that never echoes it.
+- OAuth access tokens and the legacy `HIPPO_TOKEN` are `full`. Agent tokens,
+  and so scopes, are consulted only when OAuth is configured
+  (`HIPPO_OAUTH_ISSUER` set); in legacy mode a scoped entry does nothing.
 - OAuth clients are unaffected — they never reach the agent token path
 
 This path is opt-in: if `HIPPO_AGENT_TOKEN` is not set, nothing changes.

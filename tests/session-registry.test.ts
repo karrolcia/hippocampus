@@ -36,6 +36,22 @@ describe('SessionRegistry', () => {
     assert.strictEqual(t.closed, false);
   });
 
+  it('peek returns the transport WITHOUT refreshing lastSeen (D28: a refused request must not keep a session alive)', () => {
+    const clock = makeClock();
+    const reg = new SessionRegistry<FakeTransport>({ idleMs: 1000, maxSessions: 10, now: clock.now });
+    const t = new FakeTransport('a');
+    reg.register('a', t);
+
+    clock.advance(900);
+    assert.strictEqual(reg.peek('a'), t);
+    assert.strictEqual(reg.peek('missing'), undefined);
+
+    clock.advance(900); // 1800 since register; peek must not have reset it
+    reg.sweep();
+    assert.strictEqual(reg.size, 0, 'a peeked-only session is still evicted when idle');
+    assert.strictEqual(t.closed, true);
+  });
+
   it('sweep evicts and closes sessions idle beyond idleMs', () => {
     const clock = makeClock();
     const reg = new SessionRegistry<FakeTransport>({ idleMs: 1000, maxSessions: 10, now: clock.now });

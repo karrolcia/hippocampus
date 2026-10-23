@@ -91,7 +91,10 @@ sessionSweep.unref();
 // The scope each session was created under (D28). A session's McpServer has
 // its tool set fixed at creation, so a request presenting that session's id
 // must carry the same scope — otherwise a read-only token holding a full
-// session's id would drive the full tool set. Keyed on the transport object so
+// session's id would drive the full tool set. The binding is per SCOPE, not per
+// credential: two tokens of one scope can share a session (no privilege
+// changes), and an OAuth client keeps its session across an access-token
+// refresh, which a per-credential binding would break every hour. Keyed on the transport object so
 // an evicted session's entry goes with it; no second registry to keep in step.
 const sessionScopes = new WeakMap<WebStandardStreamableHTTPServerTransport, Scope>();
 
@@ -110,7 +113,9 @@ app.all('/mcp', async (c) => {
   // Existing session: reuse its transport, stamp it active + in-flight so the
   // sweep and LRU backstop can't evict it mid-request.
   if (sessionId) {
-    const transport = sessions.touch(sessionId);
+    // peek, not touch: the scope check below may refuse, and a refused
+    // request must not refresh the session's idle timer or LRU position.
+    const transport = sessions.peek(sessionId);
     if (transport) {
       if (sessionScopes.get(transport) !== scope) {
         // 403, not 404: 404 tells a client to silently re-initialize, and
@@ -124,6 +129,7 @@ app.all('/mcp', async (c) => {
           403
         );
       }
+      sessions.touch(sessionId);
       sessions.setInFlight(sessionId, 1);
       try {
         return await transport.handleRequest(c.req.raw);

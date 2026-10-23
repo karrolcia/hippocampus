@@ -51,6 +51,15 @@ export class SessionRegistry<T extends SessionTransport> {
     return this.entries.size;
   }
 
+  /**
+   * Look up a session WITHOUT stamping it. For checks that may refuse the
+   * request: a refused request must not keep a session alive (D28 — a
+   * cross-scope probe would otherwise reset the idle timer indefinitely).
+   */
+  peek(sessionId: string): T | undefined {
+    return this.entries.get(sessionId)?.transport;
+  }
+
   /** Look up an active session and stamp it as just-used. */
   touch(sessionId: string): T | undefined {
     const entry = this.entries.get(sessionId);

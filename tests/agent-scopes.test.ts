@@ -33,6 +33,7 @@ process.env.HIPPO_AGENT_TOKEN = [
 ].join(',');
 
 const { initDatabase, closeDatabase } = await import('../src/db/index.js');
+const { createToken, registerClient } = await import('../src/db/oauth.js');
 const { app } = await import('../src/index.js');
 const { parseAgentTokens, scopeAllows, TOOL_MIN_SCOPE } = await import('../src/auth/scopes.js');
 const { createMcpServer, _internal } = await import('../src/mcp/server.js');
@@ -121,9 +122,10 @@ describe('parseAgentTokens', () => {
     assert.ok(!JSON.stringify(p.unknownLabels).includes('x'.repeat(40)), 'token material must not be reported');
   });
 
-  test('a long label is capped, so a mis-pasted token is not echoed whole', () => {
-    const p = parseAgentTokens(`${'y'.repeat(64)}:oops`);
-    assert.equal(p.unknownLabels[0].length, 16);
+  test('a label that is not word-shaped is never echoed (prefix at the wrong end)', () => {
+    const p = parseAgentTokens(`${'a1'.repeat(32)}:read`);
+    assert.equal(p.entries.length, 0);
+    assert.deepEqual(p.unknownLabels, ['<unrecognized>']);
   });
 
   test('the 32-char floor applies to the token part, not the whole entry', () => {
@@ -288,6 +290,15 @@ describe('session binding', () => {
     assert.equal(r.status, 403);
   });
 
+  test('a refused cross-scope request does not refresh the session (peek before touch)', async () => {
+    const fullSid = await openSession(BARE);
+    // Through the route this is observable only as "refused, and still alive";
+    // that peek leaves the idle timer alone is pinned in session-registry.test.ts.
+    const r = await rpc(READ, fullSid, 'tools/list');
+    assert.equal(r.status, 403);
+    assert.equal((await rpc(BARE, fullSid, 'tools/list')).status, 200);
+  });
+
   test('the same token reusing its own session is fine (control)', async () => {
     const sid = await openSession(WRITE);
     const r = await rpc(WRITE, sid, 'tools/list');
@@ -305,5 +316,15 @@ describe('createMcpServer at each scope (direct, no HTTP)', () => {
         assert.equal(tool.enabled, scopeAllows(scope, name), `${scope}/${name}`);
       }
     }
+  });
+});
+
+describe('OAuth access token', () => {
+  test('is full scope through the real route (claude.ai path)', async () => {
+    const access = 'oauth-access-' + 'q'.repeat(40);
+    registerClient('scope-test-client', ['https://test.local/cb'], 'scope test');
+    createToken(access, 'access', 'scope-test-client', null, Date.now() + 60_000);
+    const sid = await openSession(access);
+    assert.deepEqual(await listTools(access, sid), ALL_TOOLS);
   });
 });
