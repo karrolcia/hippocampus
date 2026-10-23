@@ -89,7 +89,9 @@ clients hold a single token, never the whole list.
   the entity. Both report the evicted text (`replaced: true`).
 - Backwards compatibility assumes no deployed token contains a colon (the
   mint scripts produce hex). One that does is read as `<label>:<token>` and
-  fails closed: 401, plus a startup warning that never echoes it.
+  fails closed: 401, plus a startup warning that logs at most a 1-8 letter
+  label (anything else logs as `<unrecognized>`), and no warning at all if
+  the part before the colon happens to be a scope name.
 - OAuth access tokens and the legacy `HIPPO_TOKEN` are `full`. Agent tokens,
   and so scopes, are consulted only when OAuth is configured
   (`HIPPO_OAUTH_ISSUER` set); in legacy mode a scoped entry does nothing.

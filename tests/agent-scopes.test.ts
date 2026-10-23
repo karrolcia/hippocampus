@@ -34,7 +34,7 @@ process.env.HIPPO_AGENT_TOKEN = [
 
 const { initDatabase, closeDatabase } = await import('../src/db/index.js');
 const { createToken, registerClient } = await import('../src/db/oauth.js');
-const { app } = await import('../src/index.js');
+const { app, _internal: indexInternal } = await import('../src/index.js');
 const { parseAgentTokens, scopeAllows, TOOL_MIN_SCOPE } = await import('../src/auth/scopes.js');
 const { createMcpServer, _internal } = await import('../src/mcp/server.js');
 const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
@@ -292,11 +292,22 @@ describe('session binding', () => {
 
   test('a refused cross-scope request does not refresh the session (peek before touch)', async () => {
     const fullSid = await openSession(BARE);
-    // Through the route this is observable only as "refused, and still alive";
-    // that peek leaves the idle timer alone is pinned in session-registry.test.ts.
-    const r = await rpc(READ, fullSid, 'tools/list');
-    assert.equal(r.status, 403);
-    assert.equal((await rpc(BARE, fullSid, 'tools/list')).status, 200);
+    const reg = indexInternal.sessions;
+    const originalTouch = reg.touch.bind(reg);
+    let touched = 0;
+    reg.touch = (id: string) => {
+      touched++;
+      return originalTouch(id);
+    };
+    try {
+      const r = await rpc(READ, fullSid, 'tools/list');
+      assert.equal(r.status, 403);
+      assert.equal(touched, 0, 'a refused request must not stamp the session');
+      assert.equal((await rpc(BARE, fullSid, 'tools/list')).status, 200);
+      assert.equal(touched, 1, 'control: an accepted request does stamp it');
+    } finally {
+      reg.touch = originalTouch;
+    }
   });
 
   test('the same token reusing its own session is fine (control)', async () => {

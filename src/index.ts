@@ -98,6 +98,10 @@ sessionSweep.unref();
 // an evicted session's entry goes with it; no second registry to keep in step.
 const sessionScopes = new WeakMap<WebStandardStreamableHTTPServerTransport, Scope>();
 
+// Exposed for tests only: the peek-before-touch ordering is invisible through
+// the route (a refused request leaves the session alive either way).
+export const _internal = { sessions };
+
 app.all('/mcp', async (c) => {
   const sessionId = c.req.header('mcp-session-id');
   const scope = c.get('scope');
