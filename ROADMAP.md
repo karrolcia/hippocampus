@@ -71,7 +71,7 @@
 ## Next — prod-check FAILs (2026-10-22 quick run, D25; report `docs/prod-check-2026-10-22.md`)
 *One item per FAIL, in the report's severity order (exposure, then loss, then availability, then the rest). Every fix lands only on the owner's go, one at a time, followed by a re-run of that row. Signal for the whole block: the count of FAIL on `launch` rows in the next quick run. It should reach 0, and a rise means a regression shipped.*
 
-- [ ] **AUTH-05: rate-limit the login and token endpoints** [quick] — `createRateLimiter` is mounted on `/mcp` only (`src/index.ts`), so `POST /authorize`, `POST /token` and `POST /register` take unlimited requests.
+- [x] **AUTH-05: rate-limit the login and token endpoints** [quick] — *done 2026-10-22 (D26, `5243a9d`); re-run 2026-10-23 on prod: `POST /token` returns `x-ratelimit-limit: 30`, and the counter decremented once per request.* — `createRateLimiter` is mounted on `/mcp` only (`src/index.ts`), so `POST /authorize`, `POST /token` and `POST /register` take unlimited requests.
   - **Helps:** When someone tries to guess my server's password, I want them stopped after a handful of tries, so my whole memory store isn't one patient script away from theirs.
   - **Done:** `POST /authorize` and `POST /token` return 429 after 5 requests per IP per minute, and `/register` after a looser limit; failed logins are also capped globally for the one account (per-IP alone is beaten by IPv6 address rotation); a test drives `app.request()` past each limit; `/mcp`'s limit is unchanged; `README.md` ("Rate limiting on all endpoints") and `SECURITY.md`'s rate-limit section describe what the code actually does, and the unused `RATE_LIMIT_REMEMBER` is wired up or removed.
   - **Locked:** the limiter key is the real client IP; the review measured that Caddy replaces a forged `X-Forwarded-For`.
@@ -88,14 +88,14 @@
   - **Load:** D14/`STRICT_TOOLS` notes in CLAUDE.md (scope-widening hazard), `src/mcp/param-normalization.ts`, `scripts/sync-agents.ts` (a writer).
   - **Assumes:** OAuth tokens (Claude.ai and other clients) stay full-scope, since they are the owner (verify with the owner before building).
   - **Where:** `src/auth/oauth.ts` (`matchesAgentToken`), `src/mcp/server.ts`, `src/config.ts`, `tests/`.
-- [ ] **BKP-01: nightly encrypted off-box backup of `hippocampus.db`** [session] — nothing backs up the database today (no timer, cron or script on the box, in the repo or on the laptop; `SECURITY.md:266` unchecked).
+- [ ] **BKP-01: nightly encrypted off-box backup of `hippocampus.db`** [session] — *in flight 2026-10-23 on branch `backup-restore-drill` (not merged). Owner says Hetzner's daily server backups are on (console not checked by the audit).* — nothing backs up the database today (no timer, cron or script on the box, in the repo or on the laptop; `SECURITY.md:266` unchecked).
   - **Helps:** When the box dies, a volume is pruned or a token runs `forget` on the wrong thing, I want yesterday's memory back, so every AI I use still knows me tomorrow. (Indirect: every briefing and agent reads this store.)
   - **Learn:** proximate signal = age of the newest off-box backup, reported in `/health` or the box metrics; over 26 h is an alert.
   - **Done:** a nightly job runs `VACUUM INTO` (or the SQLite `.backup` API) inside the container to a dated file, so the copy is consistent rather than a raw copy of a file in use; the file is copied off-box with credentials the app container does not hold; 7 daily and 4 weekly are kept (`SECURITY.md` §10); the script is committed with an invocation note; the newest-backup age is visible somewhere the owner reads.
   - **Locked:** the backup stays SQLCipher-encrypted (it inherits the passphrase); no plaintext export as the backup format.
   - **Assumes:** `VACUUM INTO` works on a SQLCipher database under `better-sqlite3-multiple-ciphers` and produces a file that opens with the same passphrase (verify on a scratch DB first); the container's read-only root allows writing the dump to `/data` (verify: free space and a test file).
   - **Where:** `scripts/` (new backup script), the box's systemd units (new timer), `SECURITY.md` §10.
-- [ ] **BKP-03: first restore drill, dated** [session] — no restore has ever been done (`SECURITY.md:274` unchecked). Depends on BKP-01.
+- [ ] **BKP-03: first restore drill, dated** [session] — *in flight 2026-10-23 on branch `backup-restore-drill` (not merged).* — no restore has ever been done (`SECURITY.md:274` unchecked). Depends on BKP-01.
   - **Helps:** When I need the backup, I want to already know it opens, so the bad day doesn't also become the day I find out the passphrase or format was wrong.
   - **Done:** the newest backup is restored into a scratch container (never prod) with the passphrase; an observation and entity count plus one `recall` match against prod; the date and commands are recorded in a runbook section; `SECURITY.md:274` ticked with that date.
   - **Assumes:** the passphrase is held somewhere other than the box `.env` (OPS-13 question in the report; if not, that is the first fix).
@@ -109,10 +109,7 @@
 - [x] **SRV-03: make SSH key-only on the hippo box** [quick] — *done 2026-10-22 by the owner; re-run: password-only login refused, key login works.* — `sshd -T` gives `passwordauthentication yes` (compiled default). Mitigated today because every login-shell account has a locked password.
   - **Done:** a drop-in in `sshd_config.d` with `PasswordAuthentication no`; `sshd -t` passes; reload (not restart) with a second session kept open; `sshd -T` shows `no`.
   - **Where:** the box only. Owner applies it; the audit stays read-only.
-- [ ] **WEB-01: validate and bound the OAuth routes** [quick] — `/register` bodies are unvalidated, unauthenticated and unthrottled, registered clients never expire (`src/db/oauth.ts:96-97` purges codes and tokens only), and no layer caps request bodies, so a pre-auth request can make the process buffer an arbitrary body (code-read lead, not exercised).
-  - **Helps:** indirect. A stranger can't grow the encrypted DB without limit through an open endpoint.
-  - **Done:** zod schemas on `/register` (`redirect_uris`: 1-5 URL strings; `client_name` max 200), `POST /authorize` and `/token` (required fields present, so a missing `password` or `code_verifier` gets a 400 rather than a 500); `bodyLimit` on the OAuth routes and a `request_body max_size` in Caddy; clients with no token issued in 30 days are purged; tests for each refusal; `SECURITY.md`'s 10 KB body-cap claim made true or removed. Coordinate with the open-registration phish item above, which may change `/register` policy.
-  - **Where:** `src/auth/oauth.ts`, `src/db/oauth.ts`, `tests/`.
+- [x] **WEB-01: validate and bound the OAuth routes** — *split 2026-10-23: rate limits and the 16 KB body cap landed with D26; the rest (schemas, `redirect_uris` cap, client expiry, the SECURITY.md body-cap claim) is the "Validate the OAuth route inputs" item under Next, which owns it.*
 - [ ] **SRV-09: scheduled build-cache prune and a journald cap on the hippo box** [quick] — 20.6 GB build cache and 18.3 GB reclaimable images with no prune job; journald at 3.9 GB, uncapped beyond the default; the 80% disk check only writes a log line.
   - **Done:** a weekly `docker builder prune -f` timer (zero-blip; never `system prune --volumes`); `SystemMaxUse=1G`; the 80% WARN reaches the external alert from OBS-01. Box-side, applied by the owner.
   - **Where:** the box; `scripts/health-check.sh` (commit it per the Housekeeping item).
