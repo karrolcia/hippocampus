@@ -657,7 +657,7 @@ type WrappedHandler = (request: ToolCallRequest, extra: unknown) => Promise<Tool
 
 let callId = 0;
 async function callRecall(args: Record<string, unknown>) {
-  const server = createMcpServer();
+  const server = createMcpServer('full');
   const handlers = (server as unknown as {
     server: { _requestHandlers: Map<string, WrappedHandler> };
   }).server._requestHandlers;

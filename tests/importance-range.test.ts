@@ -75,7 +75,7 @@ async function callTool(
  * CLAUDE.md is a case where the two disagreed silently.
  */
 async function advertisedImportanceBounds(): Promise<{ minimum: number; maximum: number }> {
-  const server = createMcpServer();
+  const server = createMcpServer('full');
   const handler = getHandler<ToolsListRequest>(server, 'tools/list');
   const { tools } = (await handler(
     { jsonrpc: '2.0', id: ++callId, method: 'tools/list', params: {} },
@@ -262,7 +262,7 @@ describe('importance accepts the range it advertises', () => {
   // deliberately does NOT hardcode 2.0 — a literal here would keep passing if the
   // ceiling were lowered, which is the drift the guard above exists to catch.
   test('the advertised maximum round-trips through the tool boundary', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     const res = await callTool(server, 'remember', {
       content: 'PhD atmospheric physics, TU Delft',
       entity: 'range:boundary-max',
@@ -277,7 +277,7 @@ describe('importance accepts the range it advertises', () => {
   });
 
   test('the minimum is accepted and a mid-range boost stores exactly', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     for (const [entity, value] of [
       ['range:boundary-min', IMPORTANCE_MIN],
       ['range:mid-boost', 1.8],
@@ -294,7 +294,7 @@ describe('importance accepts the range it advertises', () => {
   });
 
   test('outside the range is still rejected, at both ends', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     for (const value of [IMPORTANCE_MAX + 0.1, IMPORTANCE_MIN - 0.1]) {
       const res = await callTool(server, 'remember', {
         content: `Out-of-range fixture carrying importance ${value}`,

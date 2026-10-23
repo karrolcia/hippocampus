@@ -365,7 +365,7 @@ describe('the boundary get_observation does NOT move', () => {
     // widening `.max(50000)` to `.max(500000)` left the test green while the
     // decision's load-bearing claim went false. Read the cap off the wire
     // contract instead, which is the thing the claim is actually about.
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     const handlers = (server.server as unknown as {
       _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<{ tools: Array<{ name: string; inputSchema?: { properties?: Record<string, { maxLength?: number }> } }> }>>;
     })._requestHandlers;
@@ -421,7 +421,7 @@ describe('get_observation over the real MCP wire path', () => {
   let callId = 0;
 
   before(() => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     handlers = (server.server as unknown as { _requestHandlers: Map<string, Handler> })._requestHandlers;
   });
 

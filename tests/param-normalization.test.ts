@@ -331,7 +331,7 @@ async function callTool(
 
 describe('normalizeParams — integration via MCP server dispatch', () => {
   test('remember with replaceKind (camelCase) succeeds', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     const result = await callTool(server, 'remember', {
       content: 'integration test fact',
       entity: 'paramnorm-integration',
@@ -344,7 +344,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
   });
 
   test('forget with entity_name succeeds (semantic alias)', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     // First create an entity to forget
     await callTool(server, 'remember', {
       content: 'doomed observation',
@@ -357,7 +357,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
   });
 
   test('forget with entityName succeeds (camelCase alias)', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     await callTool(server, 'remember', {
       content: 'another doomed observation',
       entity: 'paramnorm-doomed-camel',
@@ -374,7 +374,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
     // forget shape again, Zod would strip it and this call would widen to a
     // whole-entity delete — normalizeParams can't catch that (content is a
     // known param), only this dispatch-path test can.
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     await callTool(server, 'remember', {
       content: 'the observation that stays about winter cycling in Helsinki',
       entity: 'paramnorm-scoped-forget',
@@ -401,7 +401,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
   });
 
   test('update with oldContent / newContent (camelCase) succeeds', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     await callTool(server, 'remember', {
       content: 'original content',
       entity: 'paramnorm-update-test',
@@ -417,7 +417,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
   });
 
   test('context with entity alias succeeds', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     await callTool(server, 'remember', {
       content: 'context test fact',
       entity: 'paramnorm-context-test',
@@ -429,7 +429,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
   });
 
   test('canonical params still work (regression check)', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     const result = await callTool(server, 'remember', {
       content: 'canonical fact',
       entity: 'paramnorm-canonical',
@@ -441,7 +441,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
   });
 
   test('unknown param on forget surfaces as a loud error through server dispatch', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     // The strict-tool throw happens inside the wrapped handler; through the
     // real SDK dispatch it becomes a JSON-RPC error (Promise.resolve() chain
     // captures synchronous throws). Here we drive the handler directly, so
@@ -453,7 +453,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
   });
 
   test('unknown param on recall surfaces as a loud error through server dispatch', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     await assert.rejects(
       () => callTool(server, 'recall', { query: 'anything', from: '2026-08-25' }),
       /recall: unrecognized argument "from"/
@@ -465,7 +465,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
     // key must answer normally. Without it, "recall rejects" could be
     // measuring a broken fixture — a wrong DB path, a dead dispatch handler —
     // rather than the new strictness.
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     await callTool(server, 'remember', {
       content: 'strictness control fact about winter cycling',
       entity: 'paramnorm-recall-control',
@@ -481,7 +481,7 @@ describe('normalizeParams — integration via MCP server dispatch', () => {
     // params the scheduled sweeps send (briefing.sh, nightly-session-check,
     // knowledge-harvest, scripts/sync-agents.ts) — all canonical, all through
     // the same dispatch path that now rejects strays.
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     await callTool(server, 'remember', {
       content: 'canonical filter fact about espresso grind settings',
       entity: 'paramnorm-recall-filters',
@@ -537,7 +537,7 @@ describe('TOOL_PARAMS drift guard', () => {
   // client's model actually reads, so compare against that rather than the
   // Zod objects behind it.
   test('every advertised tool has an entry, with exactly its advertised params', async () => {
-    const server = createMcpServer();
+    const server = createMcpServer('full');
     const { tools } = await listTools(server);
     assert.ok(tools.length > 0, 'tools/list returned nothing — dispatch regression');
 

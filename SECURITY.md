@@ -67,8 +67,25 @@ clients hold a single token, never the whole list.
 - `bearerAuth()` checks OAuth first, falls back to the agent token
 - Constant-time comparison (`timingSafeEqual`) with a length gate
 - Revocation: rotate the env var, redeploy
-- Scope: full read/write on the configured instance (same as OAuth in the
-  self-hosted single-user model)
+- Scope (D28): each entry may carry a prefix — `read:<token>`,
+  `write:<token>`, `full:<token>`. A bare entry is `full`, so tokens minted
+  before scopes existed keep working until rotated. The scope fixes which
+  tools the session can list and call:
+  - `read`: recall, context, export, check_version, get_observation,
+    consolidate (detection only — it proposes, never deletes)
+  - `write`: the above plus remember and onboard
+  - `full`: the above plus forget, update, merge, merge_entities
+  An out-of-scope tool is absent from `tools/list` and a call to it is
+  refused in-band (`isError: true`) with a message naming the tool and both
+  scopes. Resources are readable at every scope. A session is bound to the
+  scope it was created under; presenting its id with a token of another
+  scope gets 403. An entry with an unknown label (`admin:…`) never
+  authenticates, and the server logs the label (never the token) at start.
+- `write` is "no explicit-delete tools", not "no deletion": `remember` can
+  still replace a near-duplicate written the same day, and
+  `remember({replace_kind: true})` deletes every observation of that kind on
+  the entity. Both report the evicted text (`replaced: true`).
+- OAuth access tokens and the legacy `HIPPO_TOKEN` are `full`
 - OAuth clients are unaffected — they never reach the agent token path
 
 This path is opt-in: if `HIPPO_AGENT_TOKEN` is not set, nothing changes.

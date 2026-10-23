@@ -11,6 +11,14 @@ import {
   deleteExpiredOAuthData,
 } from '../db/oauth.js';
 import { createRateLimiter, createFailureCounter } from '../middleware/rate-limit.js';
+import { parseAgentTokens, narrowerScope, SCOPES, type Scope } from './scopes.js';
+
+declare module 'hono' {
+  interface ContextVariableMap {
+    /** Set by bearerAuth on every authenticated /mcp request (D28). */
+    scope: Scope;
+  }
+}
 
 const ACCESS_TOKEN_TTL = 60 * 60 * 1000; // 1 hour
 const REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -287,26 +295,40 @@ button{padding:10px 24px;background:#333;color:white;border:none;cursor:pointer;
   return oauth;
 }
 
-// Constant-time comparison of candidate token against a configured secret.
-// Returns false if either is missing or lengths differ; always runs a
-// timingSafeEqual on equal-length buffers to avoid length-based leaks
-// once past the length gate.
-function matchesAgentToken(candidate: string): boolean {
-  if (!config.agentToken) return false;
-  // HIPPO_AGENT_TOKEN may be a comma-separated LIST, so multiple self-hosted
-  // agents (e.g. the loops box + the Mac) can each hold an independently-
-  // revocable token: revoke one by removing its entry + redeploying, without
-  // rotating the others. A single token (no comma) is the one-element case, so
-  // this is backward-compatible. Each entry is compared in constant time;
-  // entries below the 32-char floor are ignored (never match).
+// Parsed once at load: config is eager, and a restart is what changes it.
+const AGENT_TOKENS = parseAgentTokens(config.agentToken);
+if (AGENT_TOKENS.unknownLabels.length > 0) {
+  // Label only, never the token. Each such entry is ignored, so its holder
+  // gets a 401 rather than a guessed scope.
+  console.warn(
+    `HIPPO_AGENT_TOKEN: ignoring ${AGENT_TOKENS.unknownLabels.length} entr` +
+      `${AGENT_TOKENS.unknownLabels.length === 1 ? 'y' : 'ies'} with an unknown scope label ` +
+      `(${AGENT_TOKENS.unknownLabels.map((l) => JSON.stringify(l)).join(', ')}); ` +
+      `valid labels: ${SCOPES.join(', ')}`
+  );
+}
+
+// Constant-time match of a candidate against every configured agent token.
+// Returns the matching entry's scope, or null.
+//
+// HIPPO_AGENT_TOKEN is a comma-separated LIST, so each self-hosted agent
+// (e.g. the loops box + the Mac) holds an independently-revocable token:
+// revoke one by removing its entry + redeploying, without rotating the others.
+// Since D28 each entry may carry a scope prefix (`read:`, `write:`, `full:`;
+// bare = full) — see src/auth/scopes.ts. Every entry is compared, even after a
+// hit; the length gate before timingSafeEqual is the same leak it always was.
+function matchAgentToken(candidate: string): Scope | null {
   const a = Buffer.from(candidate);
-  for (const raw of config.agentToken.split(',')) {
-    const tok = raw.trim();
-    if (tok.length < 32) continue;
-    const b = Buffer.from(tok);
-    if (a.length === b.length && timingSafeEqual(a, b)) return true;
+  let matched: Scope | null = null;
+  for (const { token, scope } of AGENT_TOKENS.entries) {
+    const b = Buffer.from(token);
+    if (a.length === b.length && timingSafeEqual(a, b)) {
+      // The same token listed twice under two scopes is a config mistake;
+      // take the narrower one rather than whichever happens to come first.
+      matched = matched === null ? scope : narrowerScope(matched, scope);
+    }
   }
-  return false;
+  return matched;
 }
 
 // Bearer token verification middleware.
@@ -323,6 +345,10 @@ function matchesAgentToken(candidate: string): boolean {
 //
 // When OAuth is not configured at all (legacy single-token mode), the
 // original HIPPO_TOKEN path is preserved for backward compat.
+//
+// Every success path sets `scope` on the context for the /mcp route, which
+// binds it to the session it creates (D28). OAuth and the legacy path are
+// `full`; an agent token carries its entry's scope.
 export function bearerAuth() {
   return async (c: Context, next: Next) => {
     // Legacy mode: no OAuth, check HIPPO_TOKEN only
@@ -333,6 +359,7 @@ export function bearerAuth() {
           return c.json({ error: 'unauthorized', error_description: 'Invalid or missing token' }, 401);
         }
       }
+      c.set('scope', 'full');
       return next();
     }
 
@@ -352,11 +379,14 @@ export function bearerAuth() {
         c.header('WWW-Authenticate', 'Bearer error="invalid_token"');
         return c.json({ error: 'invalid_token', error_description: 'Token expired' }, 401);
       }
+      c.set('scope', 'full');
       return next();
     }
 
     // Fall back to agent token (machine-to-machine path)
-    if (matchesAgentToken(token)) {
+    const agentScope = matchAgentToken(token);
+    if (agentScope) {
+      c.set('scope', agentScope);
       return next();
     }
 

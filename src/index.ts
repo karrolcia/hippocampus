@@ -9,6 +9,7 @@ import { createMcpServer } from './mcp/server.js';
 import { SessionRegistry } from './mcp/session-registry.js';
 import { createRateLimiter } from './middleware/rate-limit.js';
 import { createOAuthRoutes, bearerAuth } from './auth/oauth.js';
+import type { Scope } from './auth/scopes.js';
 import { backfillEmbeddings } from './embeddings/embedder.js';
 
 // Exported for tests (driven via app.request()); the server itself only
@@ -87,14 +88,42 @@ app.use('/mcp', bearerAuth());
 const sessionSweep = setInterval(() => sessions.sweep(), SESSION_SWEEP_MS);
 sessionSweep.unref();
 
+// The scope each session was created under (D28). A session's McpServer has
+// its tool set fixed at creation, so a request presenting that session's id
+// must carry the same scope — otherwise a read-only token holding a full
+// session's id would drive the full tool set. Keyed on the transport object so
+// an evicted session's entry goes with it; no second registry to keep in step.
+const sessionScopes = new WeakMap<WebStandardStreamableHTTPServerTransport, Scope>();
+
 app.all('/mcp', async (c) => {
   const sessionId = c.req.header('mcp-session-id');
+  const scope = c.get('scope');
+  if (!scope) {
+    // bearerAuth sets a scope on every request it lets through. Reaching here
+    // without one means the middleware chain changed; refuse rather than guess.
+    return c.json(
+      { jsonrpc: '2.0', error: { code: -32603, message: 'No authorization scope resolved' }, id: null },
+      500
+    );
+  }
 
   // Existing session: reuse its transport, stamp it active + in-flight so the
   // sweep and LRU backstop can't evict it mid-request.
   if (sessionId) {
     const transport = sessions.touch(sessionId);
     if (transport) {
+      if (sessionScopes.get(transport) !== scope) {
+        // 403, not 404: 404 tells a client to silently re-initialize, and
+        // this is a credential mismatch, not a stale session.
+        return c.json(
+          {
+            jsonrpc: '2.0',
+            error: { code: -32001, message: 'Session was created under a different token scope' },
+            id: null,
+          },
+          403
+        );
+      }
       sessions.setInFlight(sessionId, 1);
       try {
         return await transport.handleRequest(c.req.raw);
@@ -114,7 +143,7 @@ app.all('/mcp', async (c) => {
   }
 
   // New session (or initialization): create a transport + server.
-  const mcpServer = createMcpServer();
+  const mcpServer = createMcpServer(scope);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     enableJsonResponse: true,
@@ -131,6 +160,7 @@ app.all('/mcp', async (c) => {
     if (transport.sessionId) sessions.drop(transport.sessionId);
   };
 
+  sessionScopes.set(transport, scope);
   await mcpServer.connect(transport);
   return transport.handleRequest(c.req.raw);
 });

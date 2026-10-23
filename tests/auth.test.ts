@@ -35,6 +35,7 @@ function makeCtx(authHeader?: string) {
   const headers = new Map<string, string>();
   if (authHeader) headers.set('authorization', authHeader);
   const responseHeaders = new Map<string, string>();
+  const vars = new Map<string, unknown>();
   let jsonBody: unknown = null;
   let jsonStatus: number | null = null;
 
@@ -45,6 +46,10 @@ function makeCtx(authHeader?: string) {
     header: (name: string, value: string) => {
       responseHeaders.set(name, value);
     },
+    set: (key: string, value: unknown) => {
+      vars.set(key, value);
+    },
+    get: (key: string) => vars.get(key),
     json: (body: unknown, status?: number) => {
       jsonBody = body;
       jsonStatus = status ?? 200;
@@ -55,6 +60,7 @@ function makeCtx(authHeader?: string) {
   return {
     ctx,
     getResponse: () => ({ body: jsonBody, status: jsonStatus, headers: responseHeaders }),
+    getVar: (key: string) => vars.get(key),
   };
 }
 
@@ -78,11 +84,13 @@ describe('bearerAuth with agent token fallback', () => {
   });
 
   test('accepts valid agent token', async () => {
-    const { ctx } = makeCtx(`Bearer ${'a'.repeat(64)}`);
+    const { ctx, getVar } = makeCtx(`Bearer ${'a'.repeat(64)}`);
     const middleware = bearerAuth();
     let nextCalled = false;
     await middleware(ctx as any, async () => { nextCalled = true; });
     assert.equal(nextCalled, true);
+    // A bare (pre-D28) entry is full scope — the backwards-compatible default.
+    assert.equal(getVar('scope'), 'full');
   });
 
   test('rejects agent token with different length (length gate)', async () => {

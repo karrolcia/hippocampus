@@ -16,8 +16,12 @@ import { onboard } from './tools/onboard.js';
 import { registerContextResources } from './resources/context.js';
 import { normalizeParams } from './param-normalization.js';
 import { IMPORTANCE_MAX, IMPORTANCE_MIN, IMPORTANCE_NEUTRAL } from '../db/observations.js';
+import { TOOL_MIN_SCOPE, scopeAllows, scopeRefusal, type Scope } from '../auth/scopes.js';
 
-export function createMcpServer(): McpServer {
+// `scope` is required, not defaulted: a caller that forgets it must not get a
+// full-scope server by accident. The /mcp route passes the scope bearerAuth
+// resolved for the request that created the session (D28).
+export function createMcpServer(scope: Scope): McpServer {
   const server = new McpServer({
     name: 'hippocampus',
     version: VERSION,
@@ -685,7 +689,58 @@ export function createMcpServer(): McpServer {
   // Lenient inbound param-name handling — see param-normalization.ts.
   installParamNormalization(server);
 
+  // Scope last, so its wrapper runs FIRST: a read-only client calling
+  // `forget({bogus: 1})` gets the scope refusal, not a strict-args error that
+  // would tell it how to shape a call it is not allowed to make.
+  applyScope(server, scope);
+
   return server;
+}
+
+type RegisteredToolHandle = { enabled: boolean; disable(): void };
+
+/**
+ * Restricts a server to the tools its scope allows (D28), in two layers:
+ *
+ * 1. Every out-of-scope tool is disabled, and the SDK filters disabled tools
+ *    out of `tools/list` — a read-only client never sees `forget` at all.
+ * 2. `tools/call` is wrapped so an out-of-scope call is refused with an error
+ *    naming the tool and the scope, instead of the SDK's bare "disabled".
+ *    The refusal is in-band (`isError: true`), the same shape the SDK uses for
+ *    a disabled or unknown tool.
+ *
+ * Fails closed: a registered tool with no entry in TOOL_MIN_SCOPE throws here,
+ * so a new tool cannot ship reachable from a read-only token by omission.
+ */
+function applyScope(server: McpServer, scope: Scope): void {
+  const registered = (server as unknown as {
+    _registeredTools: Record<string, RegisteredToolHandle>;
+  })._registeredTools;
+  const unmapped = Object.keys(registered).filter((name) => !Object.hasOwn(TOOL_MIN_SCOPE, name));
+  if (unmapped.length > 0) {
+    throw new Error(
+      `scope: tool(s) ${unmapped.join(', ')} have no minimum scope. ` +
+        'Add them to TOOL_MIN_SCOPE in src/auth/scopes.ts.'
+    );
+  }
+  for (const [name, tool] of Object.entries(registered)) {
+    if (!scopeAllows(scope, name)) tool.disable();
+  }
+
+  const handlers = (server as unknown as {
+    server: { _requestHandlers: Map<string, RequestHandler> };
+  }).server._requestHandlers;
+  const original = handlers.get('tools/call');
+  if (!original) {
+    throw new Error('scope: SDK tools/call handler not found. Install after tool registrations.');
+  }
+  handlers.set('tools/call', (request, extra) => {
+    const name = request?.params?.name;
+    if (typeof name === 'string' && Object.hasOwn(registered, name) && !scopeAllows(scope, name)) {
+      return { content: [{ type: 'text', text: scopeRefusal(name, scope) }], isError: true };
+    }
+    return original(request, extra);
+  });
 }
 
 type CallToolRequest = {
@@ -726,3 +781,7 @@ function installParamNormalization(server: McpServer): void {
     return original(request, extra);
   });
 }
+
+// Exposed for unit tests only (the fail-closed check needs a server with a
+// tool that has no scope entry, which createMcpServer cannot produce).
+export const _internal = { applyScope };
