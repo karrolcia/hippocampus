@@ -13,7 +13,7 @@
 
 A quick run proves the worst failures are absent. It does not prove readiness.
 
-*Disclosure hold: this report goes to the public remote only after AUTH-05, SRV-03 and WEB-07 are fixed (owner's call, 2026-10-22). All three were fixed and re-run by 2026-10-23; the push still waits for the owner's go.*
+*Disclosure hold: this report goes to the public remote only after AUTH-05, SRV-03 and WEB-07 are fixed (owner's call, 2026-10-22). All three were fixed and re-run by 2026-10-23. Hold extended the same day: the push also waits for the backup work (BKP-01/03, offsite copy plus a dated restore drill) and for scoped agent tokens (SEC-06), both verified on prod.*
 
 *Status 2026-10-23. Fixed and re-run: AUTH-05, SRV-03, WEB-07. Partly fixed: WEB-01 (rate limits and a 16 KB body cap landed with D26; schemas and client expiry remain). In flight: BKP-01 and BKP-03, on branch `backup-restore-drill`. Still open as written: SEC-06, AUTH-09, SEC-04, SRV-09, OBS-01, OBS-02. The findings table below is the 2026-10-22 snapshot, kept unchanged so the next run can diff against it.*
 
