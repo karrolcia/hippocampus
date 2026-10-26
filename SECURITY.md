@@ -296,7 +296,7 @@ If a state-level actor targets your process memory specifically, neither a home 
 - [ ] Self-hosting guide in README
 
 ### Week 1
-- [ ] Automated backup script
+- [x] Automated backup script (nightly, offsite; first bundle 2026-10-26, D27)
 - [ ] npm audit in CI
 - [ ] Security headers
 - [ ] Docker Compose hardening
@@ -304,5 +304,5 @@ If a state-level actor targets your process memory specifically, neither a home 
 ### Month 1
 - [ ] Community security review
 - [ ] Dependency pinning
-- [ ] Backup restore procedure tested
+- [x] Backup restore procedure tested (first drill PASS 2026-10-26, monthly on ops-backbone, D27)
 - [ ] security.txt
