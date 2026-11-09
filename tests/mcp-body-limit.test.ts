@@ -99,7 +99,8 @@ describe('/mcp request body cap (D29)', () => {
     assert.equal(json.id, 3);
     const text: string = json.result.content[0].text;
     assert.doesNotMatch(text, /Input validation error|maximum of \d+ elements/);
-    assert.match(text, /Entity ".*" not found/);
+    // The handler's own refusal, not the SDK's or the scope layer's "Tool … not found".
+    assert.match(JSON.parse(text).message, /^Entity ".*" not found\.$/);
   });
 
   test('a merge with more than MAX_TOOL_INPUT_ELEMENTS ids is refused before zod, in a short error', async () => {
