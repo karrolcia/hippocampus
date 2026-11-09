@@ -21,11 +21,22 @@ import { TOOL_MIN_SCOPE, scopeAllows, scopeRefusal, type Scope } from '../auth/s
 // `scope` is required, not defaulted: a caller that forgets it must not get a
 // full-scope server by accident. The /mcp route passes the scope bearerAuth
 // resolved for the request that created the session (D28).
+// Most array elements plus object members one tools/call `arguments` may hold
+// (D29). Checked by the SDK before zod runs, so an oversized array is refused
+// in O(limit) instead of zod allocating one issue object per bad element (a
+// 1 MiB `merge.observation_ids` of numbers cost ~425 MB of heap and a ~32 MB
+// error response without it). Legitimate calls count under 20, except `merge`,
+// which counts its ids + 2; a 1,000-id merge is far past any real cluster.
+export const MAX_TOOL_INPUT_ELEMENTS = 1000;
+
 export function createMcpServer(scope: Scope): McpServer {
-  const server = new McpServer({
-    name: 'hippocampus',
-    version: VERSION,
-  });
+  const server = new McpServer(
+    {
+      name: 'hippocampus',
+      version: VERSION,
+    },
+    { maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS }
+  );
 
   server.tool(
     'remember',

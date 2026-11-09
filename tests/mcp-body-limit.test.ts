@@ -15,6 +15,8 @@ process.env.HIPPO_AGENT_TOKEN = AGENT_TOKEN;
 
 const { initDatabase, closeDatabase } = await import('../src/db/index.js');
 const { app, MCP_MAX_REQUEST_BODY_BYTES } = await import('../src/index.js');
+const { MAX_TOOL_INPUT_ELEMENTS } = await import('../src/mcp/server.js');
+const { DEFAULT_MAX_REQUEST_BODY_SIZE } = await import('@modelcontextprotocol/sdk/server/requestBody.js');
 
 before(() => {
   initDatabase();
@@ -72,30 +74,61 @@ function hostileMergeBody(bytes: number): string {
 }
 
 describe('/mcp request body cap (D29)', () => {
-  test('cap is 1 MiB and below the SDK default of 4 MiB', () => {
+  test('cap is 1 MiB and below the SDK default', () => {
     assert.equal(MCP_MAX_REQUEST_BODY_BYTES, 1024 * 1024);
+    assert.ok(MCP_MAX_REQUEST_BODY_BYTES < DEFAULT_MAX_REQUEST_BODY_SIZE);
   });
 
   test('largest legitimate call (update, two 50,000-char strings, fully \\u-escaped) is admitted', async () => {
     const sessionId = await openSession();
-    // Every code unit escaped as \uXXXX: the worst a client may legally send.
-    const escaped = '\\u00e9'.repeat(50000);
+    // Every code unit of every string escaped as \uXXXX: the worst a client
+    // may legally send. The lengths are update's schema maxima.
+    const esc = (n: number) => '\\u00e9'.repeat(n);
     const body =
       '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"update","arguments":{' +
-      `"entity":"${'e'.repeat(200)}","old_content":"${escaped}","new_content":"${escaped}","kind":"${'k'.repeat(50)}"}}}`;
-    assert.ok(body.length > 600_000, `worst-case legit body is ${body.length} bytes`);
+      `"entity":"${esc(200)}","old_content":"${esc(50000)}","new_content":"${esc(50000)}","kind":"${esc(50)}"}}}`;
+    assert.ok(body.length > 601_500, `worst-case legit body is ${body.length} bytes`);
     assert.ok(body.length < MCP_MAX_REQUEST_BODY_BYTES);
 
     const res = await app.request('/mcp', { method: 'POST', headers: mcpHeaders(sessionId), body });
-    // Reached the tool: the update fails in-band (no such entity), which proves
-    // the body was read and parsed rather than refused for size.
+    // Reached the tool's own handler: the update fails in-band because the
+    // entity does not exist. A size refusal (413), a schema refusal ("Input
+    // validation error") or an element-cap refusal would each read differently.
     assert.equal(res.status, 200);
     const json = await res.json();
     assert.equal(json.id, 3);
-    assert.ok(json.result, 'tool result, not a transport error');
+    const text: string = json.result.content[0].text;
+    assert.doesNotMatch(text, /Input validation error|maximum of \d+ elements/);
+    assert.match(text, /not found/i);
   });
 
-  test('oversized body with Content-Length is refused with 413 before parsing', async () => {
+  test('a merge with more than MAX_TOOL_INPUT_ELEMENTS ids is refused before zod, in a short error', async () => {
+    const sessionId = await openSession();
+    const call = (ids: number) =>
+      app.request('/mcp', {
+        method: 'POST',
+        headers: mcpHeaders(sessionId),
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 4,
+          method: 'tools/call',
+          // numbers, not strings: every element fails zod, the blowup's shape
+          params: { name: 'merge', arguments: { content: 'x', observation_ids: new Array(ids).fill(1) } },
+        }),
+      });
+    // content + observation_ids = 2 members, so ids = limit - 2 sits exactly at the cap.
+    const atCap = await (await call(MAX_TOOL_INPUT_ELEMENTS - 2)).text();
+    assert.doesNotMatch(atCap, /maximum of \d+ elements/, 'at the cap: reaches zod');
+    assert.match(atCap, /Input validation error/);
+
+    const over = await call(MAX_TOOL_INPUT_ELEMENTS - 1);
+    assert.equal(over.status, 200);
+    const text = await over.text();
+    assert.match(text, new RegExp(`maximum of ${MAX_TOOL_INPUT_ELEMENTS} elements`));
+    assert.ok(text.length < 1000, `refusal is ${text.length} bytes, not one line per element`);
+  });
+
+  test('oversized body with a declared Content-Length is refused with 413', async () => {
     const sessionId = await openSession();
     const body = hostileMergeBody(MCP_MAX_REQUEST_BODY_BYTES + 1);
     const res = await app.request('/mcp', {
