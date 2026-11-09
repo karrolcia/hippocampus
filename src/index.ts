@@ -24,6 +24,16 @@ const startedAt = Date.now();
 const SESSION_IDLE_MS = 30 * 60 * 1000; // evict sessions idle longer than this
 const SESSION_SWEEP_MS = 5 * 60 * 1000; // idle-sweep cadence
 const MAX_SESSIONS = 1000; // hard backstop against burst growth
+// Largest /mcp body the transport will read (D29). Derived, not picked: the
+// biggest legitimate call is `update` (two 50,000-char strings + 250 chars of
+// other params = 100,250 UTF-16 code units). A client may legally escape every
+// one as \uXXXX (6 bytes), so ~602 KB, plus a JSON-RPC envelope under 1 KB.
+// 1 MiB is the next round size above. Bounds the zod memory blowup on oversized
+// arrays (2 MB of array elements costs ~341 MB of heap on zod 3) to ~180 MB per
+// request, behind auth. The SDK default is 4 MiB; set explicitly so a future
+// default cannot move it.
+export const MCP_MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+
 const sessions = new SessionRegistry<WebStandardStreamableHTTPServerTransport>({
   idleMs: SESSION_IDLE_MS,
   maxSessions: MAX_SESSIONS,
@@ -157,6 +167,7 @@ app.all('/mcp', async (c) => {
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     enableJsonResponse: true,
+    maxRequestBodySize: MCP_MAX_REQUEST_BODY_BYTES,
     onsessioninitialized: (newSessionId) => {
       sessions.register(newSessionId, transport);
     },
