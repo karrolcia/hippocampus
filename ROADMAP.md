@@ -26,7 +26,7 @@
   - **Done:** a merge of uniform-kind sources preserves `kind` and carries `importance`; the multi-kind case behaves per the decision above; regression test covers both; CHANGELOG names `merge` beside `update`.
   - **Hold regardless of the fix:** the two `merge` commands from `dreaming/2026-07-22.md` items 2-3 stay held — a multi-kind group is ambiguous even with carry-through.
 
-- [ ] **Hippo backup and restore drill: run the setup on the boxes (BKP-01, BKP-03; D27)** [session]. Code, units and tests are on branch `backup-restore-drill`. Nothing has run on a box yet. Steps: Karolina creates the Storage Box sub-account and the two keypairs; the hippo-box and drill-host commands in the session deliverable run on her go.
+- [x] **Hippo backup and restore drill: run the setup on the boxes (BKP-01, BKP-03; D27)** [session]. **Done 2026-10-26:** first offsite bundle 10:43 UTC, first drill PASS 10:45 UTC, all three timers enabled; first scheduled drill 2026-11-01 PASS; phone alerts confirmed 2026-11-06. Open: hippo itself pages nothing until ops-kit runbook step 4 (the 09:00 UTC freshness check covers it). Steps: Karolina creates the Storage Box sub-account and the two keypairs; the hippo-box and drill-host commands in the session deliverable run on her go.
   - **Helps:** indirect. Every agent and briefing reads Hippo, and a disk loss without a working restore loses all of it.
   - **Done:** one real bundle exists offsite and one real drill of it PASSED, both dated in `drill.log`; the three timers are enabled; `SECURITY.md`'s two backup boxes are ticked with those dates.
   - **Learn:** the drill's monthly PASS/FAIL and counts in `drill.log`; any freshness alert means a nightly backup did not land.
@@ -104,6 +104,16 @@
 - [ ] **Bump `@huggingface/transformers` 4.2.0 → 4.3.0 and drop the `sharp` + `adm-zip` overrides, as its own change with a drift measurement** [session]. Held out of the 2026-09-21 Dependabot sweep on purpose: 4.3.0 is in range (`npm audit fix` takes it unasked), and it asks for `sharp ^0.35.4` and onnxruntime-node `1.30.0` (`adm-zip ^0.6.0`), which makes both overrides dead weight. But it also moves onnxruntime-node `1.24.3 → 1.30.0` under every stored vector.
   - **Done:** embed a fixed corpus of ~50 real observation texts under 4.2.0 and under 4.3.0, and report the min/mean cosine between each old/new pair. If all pairs are ≥ 0.9999, ship the bump with the two overrides removed and `npm audit` still at 0. Anything lower means stored vectors and fresh query vectors disagree, so ship it with a re-embed backfill or don't ship it.
   - **Where:** `package.json` (`dependencies` + `overrides`), `package-lock.json`, CHANGELOG Unreleased → Changed.
+
+## Watch list from 2026-11-10 session (backup install D27 + November Dependabot fix D29; deployed `2ea7045`)
+- [ ] **D29 live after the first real-client day.** Grep Caddy for 413 or 415 on `/mcp` (`ssh hippo 'journalctl -u caddy --since "24 hours ago" | grep "/mcp" | grep -cE "\"status\":(413|415)"'`). SDK 1.32 now 415s a Content-Type that merely contains `application/json`, and no non-Claude client was exercised.
+- [ ] **Backups keep landing and the 1 December drill passes.** `ssh ops-backbone 'tail -3 /var/lib/hippocampus-drill/drill.log'`. Bundles are ~51 MB (not the 15-20 MB D27 estimated), so 14 is about 700 MB offsite.
+- [ ] [you] **Decide: drill private key copy in `~/hippo-backup-secrets/gnupg`.** The exported `.asc` is deleted; the keyring folder where it was generated still holds it. Delete it (ops-backbone has its own copy) or keep it as a second copy.
+- [ ] **ops-kit runbook step 4 on hippo** (direct FAIL page for the nightly backup; today a missed night is only noticed at 09:00 UTC by the freshness check). This belongs to ops-kit; filed here because D27 depends on it.
+
+### Assumptions from the 2026-11-10 session (verify before work that depends on them)
+- [ ] **No legitimate client sends more than 1,000 elements in one tool call.** D29's `maxToolInputElements` refuses a 999+-id `merge` in-band. Nothing in-repo builds one, but an external consumer was not checked. If one does, merge in batches or raise the cap.
+- [ ] **The iPhone keeps its `ops-alerts` subscription.** Confirmed once (2026-11-06 test push). Re-check if a drill FAIL ever goes unseen: `ops-backbone` publishes to the local ntfy only.
 
 ## Watch list from 2026-10-23 session (scoped agent tokens, D28)
 - **`write` can still wipe a kind on any entity.** `remember({replace_kind: true})` deletes every same-kind observation on whichever entity it names, and a `write` token can name any entity. The AppKeep/seo/box consumers all need `replace_kind`, so this was accepted rather than closed. If a narrower bound is wanted, the next step is an entity-prefix allowlist per token (`write[radar:]:<hex>`), not a fourth scope.
