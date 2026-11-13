@@ -346,6 +346,11 @@ export function createMcpServer(scope: Scope): McpServer {
       observation_ids: z
         .array(z.string())
         .min(2)
+        // The same 998 the element cap allows (ids + 2 members). A second layer
+        // under it: on zod 4 a failed .max() stops before the per-element pass
+        // (a 1M-element array: 1 issue, ~0 MB, against 1M issues and ~334 MB
+        // without it; on zod 3 it measured useless, D29). D30.
+        .max(MAX_TOOL_INPUT_ELEMENTS - 2)
         .describe('IDs of observations to merge (minimum 2). All must belong to the same entity.'),
       content: z
         .string()
